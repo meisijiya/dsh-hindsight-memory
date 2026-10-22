@@ -567,3 +567,54 @@ dsh plugin --profile web remove dsh-hindsight-memory
 - 插件管理页的 DOM 选择器（便于自动化排查）：
   卡片 `[data-plugin-package="dsh-hindsight-memory"]`（`data-plugin-status=running|disabled`），
   标题按钮 `aria-label="查看 dsh-hindsight-memory"`，开关 `button[role="switch"][aria-label="启用 dsh-hindsight-memory"]`。
+
+## 21. 隔离分层观测（2026-10-22 实测，DSH 侧 + omp 侧双向）
+
+用户指定新目录 `D:\26code\测试hindsight`（已 `git init`）作为第二个项目，做隔离分层的实测。
+
+### 21.1 DSH 插件侧（`node scripts/isolation-check.mjs`，走插件自己的 client）
+
+脚本写三条探针（项目A 事实 / 项目B 事实 / 全局层事实，ASCII 标记便于抽取后仍可识别），
+再按 6 种「观察者 × scope」组合召回，最后作废探针。
+
+| 观察者 | scope | A 层 | B 层 | 全局层 |
+| --- | --- | :---: | :---: | :---: |
+| 项目A（随便问问） | project（项目层+全局层） | ✅ | ❌ | ✅ |
+| 项目A | project_only（仅项目层） | ✅ | ❌ | ❌ |
+| 项目A | global（仅全局层） | ❌ | ❌ | ✅ |
+| 项目B（测试hindsight） | project（项目层+全局层） | ❌ | ✅ | ✅ |
+| 项目B | project_only（仅项目层） | ❌ | ✅ | ❌ |
+| 项目B | global（仅全局层） | ❌ | ❌ | ✅ |
+
+矩阵与 §11 的 omp 契约完全一致：**项目层互不可见，全局层处处可见**。
+
+### 21.2 真实 omp 客户端侧（读会话文件里注入的 `<memories>` 块，不采信模型自述）
+
+| omp 运行目录 | 注入条数 | 看到 | 看不到 |
+| --- | --- | --- | --- |
+| `D:\26code\测试hindsight` | 16 | 项目B 层 + 全局层 | 项目A 层 |
+| `D:\26code\随便问问` | 17 | 项目A 层 + 全局层 | 项目B 层 |
+
+omp 侧日志还印证了标签自动盖章：`Hindsight: seeded mental model ... tags:["project:测试hindsight"]`。
+
+### 21.3 整库分层计数（87 条活跃事实，探针已清）
+
+| 视角 | 全局层 | 本项目层 | 其它项目层 |
+| --- | --- | --- | --- |
+| 随便问问 | 29 | 58 | 0 |
+| 测试hindsight | 29 | 0 | 58 |
+
+### 21.4 副产品观察（诚实账）
+
+- Hindsight 的 retain **不去重**：同一条事实写多次 = 多条 fact。当前库里「双层标签」相关 2 条、
+  「GLOBAL-LAYER」相关 2 条；omp 的 auto-retain 每 3 回合一次，会持续把会话内容写进库里，
+  长期需要「同一事实合并」的策略（服务端无 dedup 端点，只能客户端比对后 invalidate）。
+- omp 的一次 `omp -p "ISOCHECK 探针事实"` 也会被 auto-retain 写进项目层（说明**任何会话文本**都会入库），
+  想保持库干净需要定期清理或调大 `retainEveryNTurns`。
+
+### 21.5 复现命令
+
+```bash
+node scripts/isolation-check.mjs --a "D:/26code/随便问问" --b "D:/26code/测试hindsight"
+node scripts/panel.mjs --dir "D:/26code/随便问问"
+```
