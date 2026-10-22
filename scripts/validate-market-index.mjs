@@ -391,6 +391,29 @@ if (!plugin) {
 	}
 }
 
+// 防呆：工作区的 package.json 必须与 HEAD 提交里的**内容**一致。
+// 背景：文件编辑工具会保留 mtime，而「0.6.2 → 0.6.3」这类改动**字节数不变**，
+// 于是 git 的 stat 缓存认为文件没动过，`git add -A` 静默沿用旧 blob ——
+// 版本号就这么被吞掉，市场索引指向一个版本号不符的 commit（v0.6.3 实踩）。
+// 用 `git hash-object` 强制读内容比对，不依赖 stat 缓存。
+{
+	const workBlob = git(["hash-object", "--path=package.json", "package.json"]);
+	const headBlob = git(["rev-parse", "HEAD:package.json"]);
+	if (workBlob.status === null || headBlob.status === null) {
+		check("工作区 package.json 内容与 HEAD 一致", "skip", "git 不可用（沙箱限制）");
+	} else if (workBlob.status !== 0 || headBlob.status !== 0) {
+		check("工作区 package.json 内容与 HEAD 一致", "fail", "读不到 package.json 或 HEAD 上没有该文件");
+	} else {
+		const work = workBlob.output.trim();
+		const head = headBlob.output.trim();
+		check(
+			"工作区 package.json 内容与 HEAD 一致",
+			work === head ? "pass" : "fail",
+			work === head ? "一致" : "工作区有未提交改动（或被 stat 缓存吞掉）",
+		);
+	}
+}
+
 const failed = results.filter((entry) => entry.status === "fail");
 if (asJson) {
 	console.log(JSON.stringify({ ok: failed.length === 0, results }, null, 2));
