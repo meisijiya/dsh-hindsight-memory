@@ -965,7 +965,7 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 ### 27.8 本轮同时修掉的静默偏差
 `src/hygiene.js` 的 `recency(fact)` 原本只读下划线时间键（`updated_at`/`created_at`/`timestamp`/`stored_at`），而 `findDuplicateGroups` 产出的成员用的是驼峰 `createdAt` ⇒ `planPrune` 实际"保留扫描序第一条"而不是"最新一条"。修法：recency 依次读 `updated_at → updatedAt → created_at → createdAt → timestamp → stored_at`；成员映射补 `updatedAt: fact?.updated_at ?? null`。
 
-### 27.9 测试覆盖摘要（`test/maintenance.test.js`，14 个用例）
+### 27.9 测试覆盖摘要（`test/maintenance.test.js`，15 个用例）
 纯函数层（`src/maintenance.js`，零 import、不碰网络，可离线跑）：
 - **陈旧边界**：`age >= maintenanceStaleDays × 86400000` 闭区间——正好 180 天算陈旧，179 天不算；无时间戳的事实**不判**陈旧（保守，宁可漏判不可误伤）。
 - **observation 默认排除**：`staleCandidates` 默认不含 observation，`includeObservations:true` 才纳入。
@@ -978,5 +978,6 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 - **PATCH 体形状**：`correctionPatch`（`{text,reason}`）、`supersedePatch`（`{state:"invalidated",reason}`）、`restorePatch`（`{state:"valid"}`）。
 - **畸形输入**：`null` / 非数组 / 缺字段一律不抛异常，返回 `[]` / `null` / 空对象。
 - **字段一致性**：`maintenanceStaleDays` / `maintenanceStuckMinutes` / `maintenanceRequireConfirm` 在 `src/config.js`、`src/schema.js`、`src/ui-client.js` 三处都在。
+- **工具级护栏（离线可验）**：用 mock ctx 跑 `apply()`，断言注册工具数 **仍为 9**（维护并入既有工具、不新增工具），且 `memory_hygiene` 的 `retract` 缺 `confirm` ⇒ `confirm_required`、带 `confirm` 缺 `reason` ⇒ `reason_required`，`memory_pages` 的 `delete`、`memory_mental_models` 的 `delete` / `clear` 同样在**发请求之前**就被拦下。
 
-全量闸门：`node --test "test/*.test.js"` ⇒ **84 个单测全过**（基线 70 + 本轮 14）。
+全量闸门：`node --test "test/*.test.js"` ⇒ **85 个单测全过**（基线 70 + 本轮 15）。
