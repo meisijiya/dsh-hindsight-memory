@@ -62,6 +62,12 @@ export const FIELD_DOCS = {
 	recallTimeoutMs: "召回超时（毫秒）。omp 的 recallTimeoutMs 默认 30000。",
 	retainTimeoutMs: "写入超时（毫秒）。omp 的 retainTimeoutMs 默认 60000。",
 	reflectTimeoutMs: "综合问答超时（毫秒）。omp 的 reflectTimeoutMs 默认 120000。",
+	hygieneThreshold: "近重复阈值（0-1）。越高越保守。0.9 只抓逐字重复，0.8 能抓「同一件事换个说法」。",
+	hygieneMaxFacts: "单次扫描条数上限。防 O(n²) 爆掉。",
+	hygieneProjectMission: "项目层 observation 的保留口径（写入 bank 的 consolidation_strategies）。",
+	hygieneProjectMaxObservations: "项目层 observation 条数上限。",
+	hygieneGlobalMission: "全局层 observation 的保留口径（bank 级 observations_mission）。",
+	hygieneGlobalMaxObservations: "全局层 observation 条数上限。",
 };
 
 /**
@@ -91,7 +97,40 @@ export const Config = z
 			recallTimeoutMs: z.number().default(30_000).description(FIELD_DOCS.recallTimeoutMs),
 			retainTimeoutMs: z.number().default(60_000).description(FIELD_DOCS.retainTimeoutMs),
 			reflectTimeoutMs: z.number().default(120_000).description(FIELD_DOCS.reflectTimeoutMs),
+			hygieneThreshold: z.number().default(0.9).description(FIELD_DOCS.hygieneThreshold),
+			hygieneMaxFacts: z.number().default(500).description(FIELD_DOCS.hygieneMaxFacts),
+			hygieneProjectMission: z
+				.string()
+				.default("只保留该项目中长期有效的技术决策、约定、硬约束与踩过的坑；不保留一次性进度、临时状态与重复表述。")
+				.description(FIELD_DOCS.hygieneProjectMission),
+			hygieneProjectMaxObservations: z.number().default(40).description(FIELD_DOCS.hygieneProjectMaxObservations),
+			hygieneGlobalMission: z
+				.string()
+				.default("只保留跨项目长期有效的约定、环境事实与用户偏好；不保留一次性进度、临时状态与重复表述。")
+				.description(FIELD_DOCS.hygieneGlobalMission),
+			hygieneGlobalMaxObservations: z.number().default(30).description(FIELD_DOCS.hygieneGlobalMaxObservations),
 		})
 	: FALLBACK;
+
+/**
+ * 可在线编辑的配置 schema（volatile 变体）。
+ *
+ * 为什么需要它：DSH 的「插件 → 配置」表单**只显示 volatile 字段**
+ * （`dsh-settings` 的 `volatileForm()` 会把非 volatile 字段整段裁掉），
+ * 并且只有**运行中**的插件行才会被投影成可编辑配置项（settings namespace）。
+ * 没有 volatile 标记 ⇒ 宿主不生成表单 ⇒ 插件页显示「settings namespace 未就绪」。
+ *
+ * 做法与 dsh-mnemon 一致：把基础 schema 重新构造成 z schema，逐字段 `.volatile()`，
+ * 再由 `loader/volatile-update` 事件把改动写回运行中的配置引用。
+ */
+export const LiveConfig = z
+	? (() => {
+			const live = new z(Config.toJSON());
+			live.dict = Object.fromEntries(
+				Object.entries(live.dict ?? {}).map(([key, field]) => [key, field.volatile()]),
+			);
+			return live;
+		})()
+	: Config;
 
 export default Config;

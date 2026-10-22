@@ -18,10 +18,10 @@
 
 import { randomUUID } from "node:crypto";
 import { normalizeConfig } from "./config.js";
-import { Config } from "./schema.js";
+import { LiveConfig } from "./schema.js";
 import { resolveProjectLabel } from "./label.js";
 import { HindsightMemoryClient } from "./client.js";
-import { SCOPE, TIER } from "./parity.js";
+import { SCOPE, TIER, computeBankScope } from "./parity.js";
 import { normalizeScope, sanitizeMemoryText, sanitizeTags } from "./sanitize.js";
 import { findDuplicateGroups, planPrune, summarizeGroups } from "./hygiene.js";
 import {
@@ -38,7 +38,44 @@ export const name = "hindsight-memory";
  *  而记忆只是增强。工作目录改为「能取到就用，取不到就回落 session.cwd」的柔性策略。 */
 export const inject = ["tools", "systemPrompt"];
 
-export { Config };
+/** 导出的是 **volatile 变体**：宿主的「插件 → 配置」表单只显示 volatile 字段，
+ *  且只有运行中的插件行才会被投影成可编辑配置项（settings namespace）。
+ *  没有这层标记，插件页只会写「settings namespace 未就绪」——不是 bug，是宿主契约。 */
+export { LiveConfig as Config };
+
+/**
+ * 解开宿主的 volatile 包装。
+ *
+ * 宿主把可在线改的字段包成 `{ get(), write }` 引用对象（cosmokit 的 volatile），
+ * 改配置时是**改引用里的值**而不是替换对象 ⇒ 插件必须每次读当前值，
+ * 直接当普通值用会拿到包装对象本身（`[object Object]`）。
+ * @param {unknown} value 待解包的值。
+ */
+function unwrapVolatile(value) {
+	if (
+		typeof value === "object" &&
+		value !== null &&
+		"write" in value &&
+		typeof value.get === "function"
+	) {
+		return value.get();
+	}
+	return value;
+}
+
+/**
+ * 递归解开配置对象里的 volatile 包装。
+ * @param {Record<string, unknown>} value 原始配置。
+ */
+function unwrapConfig(value) {
+	const out = {};
+	for (const [key, child] of Object.entries(value ?? {})) {
+		const raw = unwrapVolatile(child);
+		out[key] =
+			raw && typeof raw === "object" && !Array.isArray(raw) ? unwrapConfig(raw) : raw;
+	}
+	return out;
+}
 
 const JSON_OBJECT_OUTPUT = { type: "object", additionalProperties: true };
 
@@ -107,7 +144,7 @@ function candidateStrategies(config) {
  * @param {object} rawConfig 配置。
  */
 export async function apply(ctx, rawConfig = {}) {
-	const config = normalizeConfig(rawConfig);
+	const config = normalizeConfig(unwrapConfig(rawConfig));
 	const log = (message) => {
 		try {
 			ctx.logger?.warn?.(`hindsight-memory: ${message}`);
@@ -163,6 +200,25 @@ export async function apply(ctx, rawConfig = {}) {
 	});
 	ctx.effect(() => {
 		channels.clear();
+	});
+
+	// ── 2.5) 配置在线更新（宿主「插件 → 配置」表单保存后触发）──────────────
+	// 宿主把 volatile 字段的新值**写进引用对象**，所以这里重新读一遍原始配置即可。
+	// bank / apiUrl 变了 ⇒ 旧的 MCP 连接与 bank scope 都要作废重建。
+	ctx.on("loader/volatile-update", (paths) => {
+		try {
+			const next = normalizeConfig(unwrapConfig(rawConfig));
+			Object.assign(config, next);
+			for (const channel of channels.values()) {
+				channel.client.config = config;
+				channel.client.scope = computeBankScope(config, channel.label);
+				channel.client.mcp = null;
+				channel.primed = false;
+			}
+			log(`config updated: ${Array.isArray(paths) ? paths.join(", ") : "?"}`);
+		} catch (error) {
+			log(`config update failed: ${error?.message ?? error}`);
+		}
 	});
 
 	// ── 3) 工具（一次注册，模型可见面恒定）──────────────────────────────

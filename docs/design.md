@@ -676,3 +676,54 @@ node scripts/panel.mjs --dir "D:/26code/随便问问"
 - 全局层（无标签 scope）**无法被任何 `consolidation_strategies` 规则命中**（匹配语义是「scope 含全部规则标签」，
   空标签 scope 谁都匹配不上），只能靠 bank 级 `observations_mission` + `max_observations_per_scope` 兜住。
 - `memory_defense`（bank 配置里存在该键）在本镜像里只是配置透传，没有可用实现，不作为方案依赖。
+
+---
+
+## 23. 为什么「配置表单」不出现（2026-10-22 排障，v0.3.0 修复）
+
+### 23.1 现象
+
+插件已装载、v0.2.0、卡片显示「运行中」、自动召回照常工作，但详情页写着：
+
+> 这个插件行还没有被宿主暴露为可编辑配置项 (settings namespace 未就绪)。
+
+### 23.2 两道门（源码级）
+
+宿主把「插件行 → 可编辑配置项」的链路拆成两段，**两段都得过**：
+
+1. **client 槽位**：`plugins.row.config`（键 = `<包名>#<行 id>`）/ `plugins.bundle.config`（键 = `<包名>`）。
+   渲染点 `dsh-client-ui-plugin-manager/lib/client.js:2818` `renderSlot("plugins.row.config", { view, form }, { entryKey })`。
+   `formFor(id)` = `if (!configurations?.some((view) => view.ns === id)) return undefined;`（同文件 :3833）。
+2. **settings 描述符**：`dsh-settings` 的 `describe()`（lib/index.js:413）遍历配置编辑器的每个条目：
+   - `schema(entry)` 为空 ⇒ 跳过；
+   - `volatileForm(schema)` 为空 ⇒ 跳过（**只保留 volatile 字段**，非 volatile 字段整段裁掉）；
+   - `entry.fiber.state !== 2`（未在运行）⇒ 跳过。
+   产出的描述符 `ns = entry.options.id`（profile 行 id，本插件 = `hindsight-memory`）。
+
+`formFor` 拿不到描述符 ⇒ 槽位拿到的 `form` 是 `undefined` ⇒ 前端只能显示「未就绪」。
+
+### 23.3 根因
+
+v0.2.0 的 `Config` 是**普通 schema**（字段没有 `.volatile()` 标记）：
+`volatileForm()` 递归下去每个叶子都返回 `undefined` ⇒ `dict` 为空 ⇒ 返回 `undefined` ⇒
+`describe()` 直接跳过这一行 ⇒ **描述符从未产生**。
+
+对照 `dsh-mnemon`：它导出的是 `LiveConfig`（lib/index.js:17398-17420）——把基础 schema
+用 `new z(Config.toJSON())` 重建，再逐字段 `.volatile()`（只留 `remoteAccess` 不动），
+并监听 `loader/volatile-update` 把新值写回运行中的引用。
+
+### 23.4 修复（v0.3.0）
+
+- `src/schema.js`：导出 `LiveConfig`（逐字段 `.volatile()`），同时补齐 6 个 hygiene 字段（27 个字段全覆盖）。
+- `src/index.js`：
+  - `export { LiveConfig as Config }`；
+  - 新增 `unwrapVolatile` / `unwrapConfig`：宿主把可在线改的字段包成 `{ get(), write }` 引用对象，
+    直接当普通值用会拿到包装对象本身（`[object Object]`）；
+  - 新增 `loader/volatile-update` 监听：重新归一化并 `Object.assign` 进既有配置对象，
+    同时重算 `computeBankScope`、作废旧 MCP 连接、重置 `primed`。
+- `test/schema.test.js`：三条契约测试（字段齐全 / 说明非空 / **全部字段 volatile**），把这条坑钉死。
+
+### 23.5 为什么值得记
+
+功能全在、面板没有、错误提示还指向"namespace 未就绪"——**报错指向的往往不是真正的堵点**。
+真正的堵点是「字段没标 volatile」这条宿主契约，不在提示语里。
