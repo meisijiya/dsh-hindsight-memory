@@ -1,0 +1,70 @@
+{
+  "format": 1,
+  "title": {
+    "en": "dsh-hindsight-memory index",
+    "zh": "dsh-hindsight-memory 索引"
+  },
+  "description": {
+    "en": "Plugin market index for dsh-hindsight-memory, the DeepSeek Harness plugin that shares one Hindsight memory bank with omp (oh-my-pi) using identical tag semantics. Add the raw URL of this file under Plugins > Discover > Index sources.",
+    "zh": "dsh-hindsight-memory 的插件市场索引。DSH 的「插件 → 发现 → 索引源」里填入本文件的 raw URL 即可看到本插件。本插件让 DSH 与 omp 共用同一个 Hindsight 记忆库，并用同一套标签语义做全局层/项目层分层。"
+  },
+  "metadata": {
+    "categories": {
+      "memory": {
+        "title": {
+          "en": "Memory",
+          "zh": "记忆"
+        }
+      }
+    },
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-hindsight-memory",
+      "title": {
+        "en": "Hindsight memory (DSH)",
+        "zh": "Hindsight 记忆（DSH）"
+      },
+      "description": {
+        "en": "Bridges the Hindsight memory service into DeepSeek Harness with omp-identical semantics: one shared bank, project tags stamped automatically, and four semantic tools (recall/retain/reflect/status) instead of raw MCP calls. The plugin never exposes tags or bankId to the model.",
+        "zh": "把 Hindsight 记忆服务接进 DeepSeek Harness，行为与 omp 一致：同一个记忆库、项目标签自动盖章、模型只看见 recall/retain/reflect/status 四个语义化工具，看不到裸 MCP 工具，也碰不到 tags 与 bankId。"
+      },
+      "author": "meisijiya",
+      "homepage": "https://github.com/meisijiya/dsh-hindsight-memory",
+      "repository": {
+        "url": "https://github.com/meisijiya/dsh-hindsight-memory"
+      },
+      "metadata": {
+        "category": "memory",
+        "keywords": [
+          "memory",
+          "hindsight",
+          "omp",
+          "oh-my-pi",
+          "dsh",
+          "cordis",
+          "deepseek-harness",
+          "knowledge"
+        ],
+        "labels": [],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792644290,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/meisijiya/dsh-hindsight-memory",
+            "commit": "17c25f19eaaf18667b9665ec920f1533132961f2"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+          }
+        }
+      ]
+    }
+  ]
+}
