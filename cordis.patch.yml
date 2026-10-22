@@ -28,9 +28,11 @@
         # 召回预算：low | mid | high（与 omp recallBudget 同名同义）。
         budget: 'mid'
         # 是否在会话首轮自动召回一次（落在会话历史里，不进系统提示词前缀）。
-        autoRecall: false
+        # 与 omp 的 hindsight.autoRecall 默认值一致（都开）。
+        autoRecall: true
         # 是否在回合结束自动留存会话结论。
-        autoRetain: false
+        # 与 omp 的 hindsight.autoRetain 默认值一致（都开）。
+        autoRetain: true
         # 自动留存的回合间隔（对齐 omp retainEveryNTurns 默认 3）。
         retainEveryNTurns: 3
         # 注入段顺序（字面数字；落在 FILE_REFERENCE(900) 与 TOOL_BASH(1000) 之间）。
