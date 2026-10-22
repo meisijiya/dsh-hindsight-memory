@@ -54,11 +54,11 @@
       "versions": [
         {
           "version": "0.4.0",
-          "publishTimestamp": 1792659760,
+          "publishTimestamp": 1792667833,
           "source": {
             "type": "git",
             "url": "https://github.com/meisijiya/dsh-hindsight-memory",
-            "commit": "c3e5e51b705f7436bf673e7c1a4beff27d090366"
+            "commit": "0b442b0d3b0a4a7c58ea158eb56de99569175b18"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"
