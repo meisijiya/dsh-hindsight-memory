@@ -5,6 +5,14 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.6.3 — MCP 会话自愈（服务端重启不再让工具链永久失效）
+
+- 修复：MCP 会话被服务端丢弃（容器重建 / session 过期）后，`initialized` 与 `mcp-session-id` 仍是旧值 ⇒ 后续每次调用恒定 404 `Session not found`，**整条工具链永久失效**，只能靠重启 DSH 恢复。
+- 现在 `McpHttpClient.withSessionRetry()` 识别到会话失效就重置会话、重新握手并**重试一次**；`listTools` / `callTool` 都走这条路径。其它错误照常抛出，不做无谓重试。
+- 现场证据：容器重建（`hindsight` Created 2026-10-22T08:10:18Z，保留 `hindsight-old` 供回滚）后，运行中的插件实例调 `memory_retain` 直接报 `MCP tools/call failed: HTTP 404 {"code":-32600,"message":"Session not found"}`。
+- 验证：新增 `test/mcp-session.test.js`（2 条：假服务端先回 404 再回成功 ⇒ 断言重试一次 + 重新握手一次）；对**真实** Hindsight MCP 端点用过期 session id 实测 `get_bank` 成功返回 bank 内容。
+- 工具名与工具数量不变（仍 9 个），纯修复。
+
 ## 0.6.2 — 把「超时到底是谁的」写进工具输出
 
 - `memory_mental_models action=dry-run` 现在**自带结论**：失败时返回 `{ok:false,error:"dry_run_failed",hint}`，成功时也附 `hint`。

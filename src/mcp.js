@@ -45,6 +45,16 @@ export class McpError extends Error {
 	}
 }
 
+/**
+ * 服务端把会话丢掉（容器重启、session 过期）时，后续请求会拿到
+ * 404 `Session not found`。这是**可自愈**的：重新握手一次即可，
+ * 不该让整条工具链因为一次服务端重启而永久失效。
+ */
+export function isSessionLost(error) {
+	const text = String(error?.message ?? "");
+	return /session not found/i.test(text) || /session (?:has )?expired/i.test(text);
+}
+
 export class McpHttpClient {
 	/**
 	 * @param {object} options
@@ -161,17 +171,42 @@ export class McpHttpClient {
 		}
 	}
 
+	/** 丢掉当前会话（服务端重启/过期后重新握手用）。 */
+	resetSession() {
+		this.sessionId = null;
+		this.initialized = false;
+		this.tools = null;
+	}
+
+	/**
+	 * 执行一次请求；遇到会话失效就重连并重试一次。
+	 * 只有「会话失效」才重试，其它错误照常抛出。
+	 */
+	async withSessionRetry(run) {
+		try {
+			return await run();
+		} catch (error) {
+			if (!isSessionLost(error)) throw error;
+			this.log(`MCP 会话失效（${error?.message ?? error}），重新握手后重试一次`);
+			this.resetSession();
+			await this.initialize();
+			return run();
+		}
+	}
+
 	/** 列出服务端工具（带缓存）。 */
 	async listTools({ signal, refresh = false } = {}) {
 		if (this.tools && !refresh) return this.tools;
-		const result = await this.request("tools/list", {}, { signal });
-		this.tools = Array.isArray(result?.tools) ? result.tools : [];
-		return this.tools;
+		return this.withSessionRetry(async () => {
+			const result = await this.request("tools/list", {}, { signal });
+			this.tools = Array.isArray(result?.tools) ? result.tools : [];
+			return this.tools;
+		});
 	}
 
-	/** 调用工具。 */
+	/** 调用工具；会话失效时自动重连并重试一次。 */
 	async callTool(name, args = {}, { signal } = {}) {
 		await this.initialize({ signal });
-		return this.request("tools/call", { name, arguments: args }, { signal });
+		return this.withSessionRetry(() => this.request("tools/call", { name, arguments: args }, { signal }));
 	}
 }

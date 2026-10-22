@@ -1041,3 +1041,23 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 
 ### 29.4 踩坑：同 model 已有未终态操作时，新刷新会被抑制
 同一 mental model 若已有 processing/pending 的 refresh，新提交会被**抑制**（不是排队）⇒ 表现为「刷新一直没反应」。排障顺序：先 `GET /operations?limit=100` 找同 model 的未终态行，再决定等还是重试；`GET /operations?limit=300` 会 422（上限 100）。
+
+## 30. v0.6.3：MCP 会话自愈（2026-10-22）
+
+### 30.1 现象
+运行中的插件实例调 `memory_retain` 直接报：
+`MCP tools/call failed: HTTP 404 {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Session not found"}}`。
+触发条件不是网络抖动，而是**服务端把会话丢了** —— 本机 `hindsight` 容器在 2026-10-22T08:10:18Z 被重建（保留 `hindsight-old` 供回滚），容器内存里的 MCP 会话表随之清空；插件进程里 `McpHttpClient.initialized=true` 与 `mcp-session-id` 仍是旧值 ⇒ 之后**每一次**调用都 404，整条工具链永久失效，只能重启 DSH 才恢复。
+
+### 30.2 修复
+- `src/mcp.js` 新增 `isSessionLost(error)`（只认 `Session not found` / `session expired`）与 `McpHttpClient.withSessionRetry(run)`：命中会话失效就 `resetSession()`（清 `sessionId` / `initialized` / `tools` 缓存）→ 重新 `initialize()` → **重试一次**；其它错误照常抛出，不做无谓重试。
+- `listTools` / `callTool` 都改走 `withSessionRetry`。
+- 工具名与工具数量不变（仍 9 个）⇒ 纯修复。
+
+### 30.3 验证
+- 新增 `test/mcp-session.test.js`（2 条）：假 MCP 服务端先回 404 `Session not found`、再回成功 ⇒ 断言「重试一次」且「重新握手一次」。
+- 对**真实** Hindsight MCP 端点用过期 session id 实测：`get_bank` 成功返回 bank 内容（修复前必然 404）。
+- 全量单测 89 → **91**，全绿。
+
+### 30.4 运维提醒
+即便有自愈，**服务端重启后插件旧代码仍会抖一次**（失败-重连），直到 DSH 进程加载新代码 ⇒ 发布本修复后需要**重启一次 DSH**；此后容器再重建就无需人工干预。
