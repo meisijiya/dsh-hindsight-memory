@@ -613,5 +613,5 @@ export async function apply(ctx, rawConfig = {}) {
 	}
 }
 
-export default { name, inject, Config, apply };
+export default { name, inject, Config: LiveConfig, apply };
 export { MEMORY_PROTOCOL };
