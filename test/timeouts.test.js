@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { HindsightMemoryClient } from "../src/client.js";
@@ -55,4 +56,11 @@ test("long-running endpoints use the maintenance timeout instead of the short on
 			`${call.path} must use maintenanceTimeoutMs`,
 		);
 	}
+});
+
+test("dry-run failure explains the fetch ceiling and points at the async path", async () => {
+	const text = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+	assert.ok(text.includes("dry_run_failed"), "dry-run should report a stable error code");
+	assert.ok(text.includes("memory_operations"), "dry-run should point at the async polling path");
+	assert.ok(text.includes("300s"), "dry-run should name the 300s fetch ceiling");
 });

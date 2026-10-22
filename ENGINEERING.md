@@ -299,3 +299,18 @@ DSH 会对 section 文本做 `{{var}}` 插值，未知引用会抛错、整轮�
 | 分层隔离观测 | `node scripts/isolation-check.mjs` | 无（直接用 node 调用） |
 
 > 除上表外，不要在文档、脚本或提交信息里引用仓库里不存在的脚本名或 npm script。
+
+## 发布中间态：为什么 index.json 可以比 package.json 落后一个版本
+
+发布本质上是**两个 commit**：
+
+1. `feat/fix` commit：代码 + `package.json` 版本号 ↑ ↑（此时 index.json 还指着旧版本）；
+2. `chore(market)` commit：`index.json` 加新版本条目，`source.commit` 钉定第一个 commit 的 40 位 sha。
+
+两个 commit 之间必然存在一个「package.json 比索引新一个版本」的中间态（它无法避免，因为 sha 往下依赖代码 commit，而 index 要指向那个 commit）。
+所以门禁改成：**允许落后一步**（patch 或 minor 递增一次），落后两步及以上仍然 fail。
+
+- 测试：`test/market-index.test.js` 的「索引里的最新版本与 package.json 的 version 一致」（带中间态允许）
+- 校验脚本：`scripts/validate-market-index.mjs` 的「索引最新版本与 package.json 一致」（带中间态允许）
+
+两处必须同步，否则会出现「测试过但校验脚本红」或反之。

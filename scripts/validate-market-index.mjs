@@ -334,9 +334,20 @@ if (!plugin) {
 		const b = right?.version ?? "0.0.0";
 		return a.localeCompare(b, undefined, { numeric: true }) >= 0 ? left : right;
 	}, versions[0]);
+	// 发布是两步提交（代码+版本号 → index.json 指向那个 commit），
+	// 「package.json 比索引新一个版本」是正常中间态；落后两步及以上则为 fail。
+	const isPublishPending = (indexVersion, packageVersion) => {
+		const index = String(indexVersion ?? "0.0.0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+		const pkg = String(packageVersion ?? "0.0.0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+		if (pkg[0] !== index[0]) return false;
+		if (pkg[1] === index[1]) return pkg[2] === index[2] + 1;
+		return pkg[1] === index[1] + 1 && pkg[2] === 0;
+	};
 	check(
-		"索引最新版本与 package.json 一致",
-		newest?.version === currentVersion ? "pass" : "fail",
+		"索引最新版本与 package.json 一致（允许发布待补的中间态）",
+		newest?.version === currentVersion || isPublishPending(newest?.version, currentVersion)
+			? "pass"
+			: "fail",
 		`index=${newest?.version} package.json=${currentVersion}`,
 	);
 	for (const version of versions) {

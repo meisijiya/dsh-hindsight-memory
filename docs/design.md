@@ -1008,3 +1008,10 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 - 服务端**没有单页 refresh 端点**（openapi：`/knowledge-base/pages/{id}` 只有 get；refresh/dry-run-refresh 只存在于 `mental-models`）。页靠 `consolidation_strategies` 与 trigger（`mode:"delta"` + `refresh_after_consolidation:true`）在 **consolidate 之后**重算。
 - ⇒ 洗账的正确顺序是：**先洗 bank 事实 → 再 consolidate → 再核对页正文**（`is_stale` 会告诉你服务端是否认为它过期）。
 - 插件侧已有 `memory_pages update/delete`（可改可删 ⇒ 「只增不改」已补齐）；缺的是「刷新一页」的显式动作 —— 实际路径是 `memory_hygiene action=consolidate`。
+
+### 28.6 实测出来的三层超时链（v0.6.2 写进工具输出）
+1. **客户端 deadline**：此前固定 120s（`reflectTimeoutMs`）/ 60s（`refreshMentalModel` 误用 `retainTimeoutMs`）⇒ 报「Hindsight 请求超时（120000ms）」。v0.6.1 已改为 900s（`maintenanceTimeoutMs`）。
+2. **Node 内置 fetch 的 300s 头超时**：把 deadline 提到 900s 后，实测请求在 **305167ms** 断链（`TypeError: fetch failed`，无 undici 错误码）。Node v24.4.0 + undici 7.11.0 的 `headersTimeout` / `bodyTimeout` 默认都是 **300000ms**（社区同样踩坑的记录：「Node's undici fetch defaults both headersTimeout and bodyTimeout to 300000ms … fails with UND_ERR_HEADERS_TIMEOUT at 301s」）。⇒ 这层仍然在**客户端**。
+3. **服务端 LLM 预算**：env `HINDSIGHT_API_LLM_TIMEOUT=600`、`HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT=600`、`HINDSIGHT_API_REFLECT_WALL_TIMEOUT=1800` ⇒ 服务端愿意等 600s。
+
+⇒ 结论：`dry-run-refresh`（服务端**同步**接口）对大模型必然失败 —— 同步路径无论客户端怎么调都过不去 300s。正确姿势是**异步路径**：`POST /mental-models/{id}/refresh` 立刻返回 `operation_id`，再用 `GET /operations/{id}` 轮询（插件里就是 `memory_mental_models action=refresh` + `memory_operations action=list`）。v0.6.2 已把这个结论写进工具描述与返回 `hint`，避免下次再拿同步接口赌 300s。

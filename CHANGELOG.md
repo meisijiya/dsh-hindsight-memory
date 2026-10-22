@@ -5,6 +5,12 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.6.2 — 把「超时到底是谁的」写进工具输出
+
+- `memory_mental_models action=dry-run` 现在**自带结论**：失败时返回 `{ok:false,error:"dry_run_failed",hint}`，成功时也附 `hint`。
+- 完整的三层超时链（实测）：① 客户端 deadline（此前 120s、现在 900s）→ ② Node 内置 fetch 的 300s 头超时（undici `headersTimeout`/`bodyTimeout` 默认 300000ms，Node v24.4.0 + undici 7.11.0 实测在 305s 断链）→ ③ 服务端 LLM 预算（env：LLM/mental-model-refresh 600s、reflect 墙钟 1800s）。
+- ⇒ `dry-run-refresh`（服务端**同步**接口）对大模型必然失败；正确姿势是 `refresh`（异步返回 `operation_id`）→ `memory_operations` 轮询。工具描述里也写明这一点。
+
 ## 0.6.1 — 维护层超时对齐服务端预算
 
 - **问题**：`memory_mental_models dry-run` / `refresh` 在服务端 LLM 繁忙时一律报「Hindsight 请求超时（120000ms）」。取证：容器 env `HINDSIGHT_API_LLM_TIMEOUT=600`、`HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT=600`、`HINDSIGHT_API_REFLECT_WALL_TIMEOUT=1800` —— **服务端自己允许跑 600s，客户端却只有 120s 的 deadline**，所以永远是我们先超时、服务端还在算。120s 是**客户端**上限，不是服务端上限。

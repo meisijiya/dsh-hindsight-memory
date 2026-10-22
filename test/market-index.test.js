@@ -65,11 +65,32 @@ test("每个版本都声明了 engines.dsh 的 SemVer range", () => {
 	}
 });
 
-test("索引里的最新版本与 package.json 的 version 一致", () => {
+// 发布是两步提交：先提交代码+版本号，再提交 index.json 指向那个 commit。
+// 所以「package.json 比索引新一个版本」是**正常中间态**，不是 bug。
+// 这里只允许落后一步；落后两步及以上说明发布流程断了，必须 fail。
+function parseVersion(value) {
+	return String(value ?? "0.0.0")
+		.split(".")
+		.map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function isPublishPending(indexVersion, packageVersion) {
+	const index = parseVersion(indexVersion);
+	const pkg = parseVersion(packageVersion);
+	if (pkg[0] !== index[0]) return false;
+	if (pkg[1] === index[1]) return pkg[2] === index[2] + 1;
+	return pkg[1] === index[1] + 1 && pkg[2] === 0;
+}
+
+test("索引里的最新版本与 package.json 的 version 一致（允许发布待补的中间态）", () => {
 	const newest = versions
 		.map((entry) => entry.version)
 		.sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))[0];
-	assert.equal(newest, manifest.version);
+	assert.ok(
+		newest === manifest.version || isPublishPending(newest, manifest.version),
+		`索引最新版本 ${newest} 与 package.json ${manifest.version} 不一致` +
+			"（允许的中间态：package.json 比索引新一个版本；落后两步及以上说明发布流程断了）",
+	);
 });
 
 test("索引里每条版本都带 https 仓库地址", () => {

@@ -964,7 +964,7 @@ export async function apply(ctx, rawConfig = {}) {
 						type: "string",
 						enum: ["ensure", "list", "content", "refresh", "patch", "delete", "clear", "dry-run"],
 						description:
-							"要执行的动作，默认 list。delete 删模型、clear 清空正文（都不可逆，必须 confirm=true）；dry-run 预演一次刷新（只算不落库）。",
+							"要执行的动作，默认 list。delete 删模型、clear 清空正文（都不可逆，必须 confirm=true）；dry-run 预演一次刷新（只算不落库，但服务端同步接口会被客户端 300s 头超时掐断，大模型请改用 refresh + memory_operations 轮询）。",
 					},
 					id: {
 						type: "string",
@@ -1127,10 +1127,28 @@ export async function apply(ctx, rawConfig = {}) {
 								message: "memory_mental_models dry-run 需要 id。",
 							});
 						}
-						const result = await client.dryRunRefreshMentalModel(id, {
-							signal: exec?.signal,
-						});
-						return toolJson({ ok: true, action, bankId: client.bankId, id, result });
+						// 🔴 dry-run-refresh 是**服务端同步**接口：它要等 LLM 把整个模型重算一遍。
+						//   即便把客户端 deadline 提到 900s，Node 内置 fetch 仍会在 300s 掐断
+						//   （undici 的 headersTimeout / bodyTimeout 默认 300000ms），
+						//   所以大模型上 dry-run 一定失败。正确的姿势是走异步路径：
+						//   refresh（返回 operation_id）→ memory_operations 轮询。
+						const hint =
+							"dry-run-refresh 是服务端同步接口，会被 Node 内置 fetch 的 300s 头超时掐断" +
+							"（undici headersTimeout/bodyTimeout 默认 300000ms）。" +
+							"大模型请改用 refresh（异步返回 operation_id）再用 memory_operations 轮询。";
+						try {
+							const result = await client.dryRunRefreshMentalModel(id, {
+								signal: exec?.signal,
+							});
+							return toolJson({ ok: true, action, bankId: client.bankId, id, result, hint });
+						} catch (error) {
+							return toolJson({
+								ok: false,
+								error: "dry_run_failed",
+								message: String(error?.message ?? error),
+								hint,
+							});
+						}
 					}
 
 					return toolError(`memory_mental_models 不支持的动作：${action}`);
