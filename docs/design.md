@@ -727,3 +727,43 @@ v0.2.0 的 `Config` 是**普通 schema**（字段没有 `.volatile()` 标记）�
 
 功能全在、面板没有、错误提示还指向"namespace 未就绪"——**报错指向的往往不是真正的堵点**。
 真正的堵点是「字段没标 volatile」这条宿主契约，不在提示语里。
+
+## 24. v0.3.1：离线复现「插件整行不生效」，以及旁路验证法
+
+### 24.1 现象与真相
+
+v0.3.0 修完"配置表单不出现"后，本地 31 条单测全绿、schema 契约全过，
+但**用户下一次重启就会看到插件整行静默失效**。真正暴露问题的是一次旁路启动：
+
+```
+dsh: warning: 1 entry did not activate
+hindsight-memory (dsh-hindsight-memory): failed to import:
+  ReferenceError: Config is not defined
+  at .../node_modules/dsh-hindsight-memory/src/index.js:616:32
+```
+
+根因：`export { LiveConfig as Config }` 是**再导出**，不会在模块作用域里创建 `Config` 绑定；
+而默认导出写的是 `export default { name, inject, Config, apply }` ⇒ 模块求值时引用未定义标识符 ⇒
+**整行插件加载失败**（宿主只给一行 warning，功能全没了）。
+
+### 24.2 教训（三条）
+
+1. **再导出 ≠ 绑定**：`export { X as Y }` 只影响导出名；模块内部要用 `X`。
+2. **单测没覆盖入口 = 这类 bug 必然漏**：原来 31 条用例没有一条 `import("../src/index.js")`。
+   现在 `test/entry.test.js` 两条契约：入口能被 import、默认导出带可用的 `Config`。
+3. **静默失败要按"行"查**：宿主把加载失败的插件行降级为 warning，不进 UI。
+   排查手段是启动日志里的 `failed to import:` 原文，不是面板文案。
+
+### 24.3 旁路验证法（不重启用户实例）
+
+| 目的 | 手段 | 结论 |
+|---|---|---|
+| 验证插件在宿主里的真实加载 | `dsh headless --patch <overlay>.yml "…"` + 一次性探针插件打印 `ctx.settings.describe()` | headless 是**独立 profile**，不含 web profile 的插件行 ⇒ 探针里看不到 `hindsight-memory`（预期，不是 bug） |
+| 验证 web profile 的加载 | `dsh --profile web --patch <overlay>.yml --port <空闲端口> web` | 会与用户实例争 3080/3081；本机 3080/3081 同属用户进程 PID 41108 ⇒ **不可乱杀** |
+| 验证 schema 契约 | 在 profile 目录 `node --input-type=module -e "import(...schema.js)"` | 直接读 dict/meta，不依赖宿主进程 |
+
+### 24.4 用户实例的安全红线
+
+`netstat` 证据：PID 41108（`dsh lib/bin.js web --no-open`）同时监听 `127.0.0.1:3080` 与 `0.0.0.0:3081`，
+它就是承载当前会话的 DSH Web。**任何"重启/杀进程"动作都可能把会话与公网隧道一起带走** ⇒
+本插件的所有验证改走旁路（headless overlay / profile 内 import / 一次性探针），不动用户实例。

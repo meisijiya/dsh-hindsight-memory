@@ -250,3 +250,15 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | `node --test test/` 报 MODULE_NOT_FOUND | Windows 上 `test/` 被当成模块路径 | 写 `node --test "test/*.test.js"` |
 | 中文 bank id 报 400 / 建出乱码库 | bash 内联 curl 传中文 body 会坏；URL 需 percent-encode | body 写文件后 `--data-binary @file`；路径用 `urllib.parse.quote` |
 | Hindsight 容器起不来（`Unknown reranker provider: none`） | `none` 不是合法的 reranker provider | 用 `rrf`（直通不重排） |
+| 启动日志出现 `failed to import: ReferenceError: Config is not defined` | `export { LiveConfig as Config }` 只是**再导出**，模块作用域里没有 `Config` 绑定，默认导出里引用它就炸 | v0.3.1 已修：默认导出写 `Config: LiveConfig`；并加了 `test/entry.test.js` 钉住"入口必须能被 import" |
+| 启动日志 `dsh: warning: N entry did not activate` | 该插件行加载失败 ⇒ 整行静默不生效（功能全没了但没有报错弹窗） | 看同一条日志里的 `failed to import:` 原文，它才是真线索 |
+| 想验证插件在宿主里的真实加载情况 | 不能重启正在服务当前会话的 DSH 实例 | 用 `dsh headless --patch <overlay>.yml "…"` 旁路验证；注意 `dsh --profile web` 起的第二实例会和用户实例抢 3080/3081 端口 |
+
+## 版本沿革
+
+| 版本 | 内容 |
+|---|---|
+| 0.1.0 | 首个可运行版本：四个封装工具 + omp 契约对齐（盖章/过滤/预算/异步语义） |
+| 0.2.0 | 记忆卫生层：`memory_hygiene` 工具 + `src/hygiene.js` + bank 级 consolidation 配置 + 终端面板卫生板块 |
+| 0.3.0 | 把插件行投影成宿主可编辑配置项：`LiveConfig`（全部字段 `.volatile()`）+ `unwrapConfig` + `loader/volatile-update` 热更新 |
+| 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
