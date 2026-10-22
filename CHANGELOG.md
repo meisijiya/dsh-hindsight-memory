@@ -9,7 +9,7 @@
 
 - 现象（活体复现）：`memory_hygiene action=correct` 打派生 observation 时，报的不是可操作提示，而是 `整理失败：(facts ?? []) is not iterable`。
 - 根因：`client.listFacts()` 返回的是服务端分页信封 `{items:[...], total, limit, offset}`，而 `describeSources()` 按数组遍历 ⇒ 一旦走到 observation 分支就抛 TypeError，v0.6.4 的结构化提示在真实环境**从未生效**（单测用的是摊平数组，没暴露）。
-- 修复：`describeSources()` 兼容数组 / `{items:[...]}` / `{memories:[...]}` 三种形状，缺列表时返回空数组；补 1 条回归测试（92 → 93 条）。
+- 修复：`describeSources()` 兼容数组 / `{items:[...]}` / `{memories:[...]}` 三种形状，缺列表时返回空数组；在同一用例内补回归断言（92 条全绿）。
 - 结论记录：这类"调用方形状不一致"的缺陷单测覆盖不到，**必须做活体验收**。v0.6.4 的新提示在活体里首次验证通过。
 
 ## 0.6.4 — observation 不可策展时给出可操作提示（附带源事实 id）
