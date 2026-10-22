@@ -79,6 +79,9 @@ export const FIELD_DOCS = {
 	pageSearchLimit: "知识页检索默认返回条数。",
 	pageMaxTokens: "知识页正文合成上限（服务端硬下限 256）。",
 	initiativeFolder: "initiative（正在做的事）页存放的文件夹名。",
+	maintenanceStaleDays: "陈旧判定阈值（天）：updated_at 距今超过这个天数就算陈旧候选。",
+	maintenanceStuckMinutes: "卡住判定阈值（分钟）：pending/processing 超过这个分钟数算卡住。",
+	maintenanceRequireConfirm: "破坏性动作是否必须显式 confirm=true（保守默认：开）。",
 };
 
 /**
@@ -131,6 +134,9 @@ export const Config = z
 			pageSearchLimit: z.number().default(5).description(FIELD_DOCS.pageSearchLimit),
 			pageMaxTokens: z.number().default(2000).description(FIELD_DOCS.pageMaxTokens),
 			initiativeFolder: z.string().default("Initiatives").description(FIELD_DOCS.initiativeFolder),
+			maintenanceStaleDays: z.number().default(180).description(FIELD_DOCS.maintenanceStaleDays),
+			maintenanceStuckMinutes: z.number().default(30).description(FIELD_DOCS.maintenanceStuckMinutes),
+			maintenanceRequireConfirm: z.boolean().default(true).description(FIELD_DOCS.maintenanceRequireConfirm),
 		})
 	: FALLBACK;
 

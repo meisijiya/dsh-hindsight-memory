@@ -512,6 +512,102 @@ export class HindsightMemoryClient {
 		return { id: created?.id ?? null, created: true };
 	}
 
+	// ─────────────────── 维护层（改 / 退役 / 纠正）───────────────────
+	// 服务端事实层没有 DELETE，只有软退役（state=invalidated，可改回 valid）；
+	// 知识页与精神模型才有真正的 DELETE。这些接口 MCP 工具面里没有，走 REST。
+
+	/** 改写一条事实（text 会重嵌入并丢弃其派生 observation）。 */
+	async updateFact(id, patch, { signal } = {}) {
+		return this.patchJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/${encodeSegment(id)}`,
+			patch,
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	/** 软退役（invalidated）或恢复（valid）一条事实，并留下原因。 */
+	async setFactStateWithReason(id, state, reason, { signal } = {}) {
+		return this.updateFact(id, { state, reason }, { signal });
+	}
+
+	/** 事实的变更历史。 */
+	async factHistory(id, { signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/${encodeSegment(id)}/history`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/**
+	 * 写入前预演抽取（不落库）。
+	 *
+	 * 🔴 服务端契约：body 必填 `content`（字符串或内容块数组），**没有 items 字段**。
+	 *    所以这里把 items 归一成 content：单条 → 字符串；多条 → 内容块数组。
+	 */
+	async dryRunExtract(items, { signal } = {}) {
+		const list = Array.isArray(items) ? items : [items];
+		const texts = list
+			.map((item) => (typeof item === "string" ? item : String(item?.content ?? "")))
+			.map((text) => text.trim())
+			.filter(Boolean);
+		const body =
+			texts.length > 1
+				? { content: texts.map((text) => ({ type: "text", text })) }
+				: { content: texts[0] ?? "" };
+		const context = list.find(
+			(item) => item && typeof item === "object" && item?.context,
+		)?.context;
+		if (context) body.context = String(context);
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/dry-run-extract`,
+			body,
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 改一个知识页节点。 */
+	async updateKnowledgeNode(id, patch, { signal } = {}) {
+		return this.patchJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/nodes/${encodeSegment(id)}`,
+			patch,
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 删一个知识页节点。 */
+	async deleteKnowledgeNode(id, { signal } = {}) {
+		return this.deleteJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/nodes/${encodeSegment(id)}`,
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 删一个精神模型。 */
+	async deleteMentalModel(id, { signal } = {}) {
+		return this.deleteJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}`,
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 清空一个精神模型的正文。 */
+	async clearMentalModel(id, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/clear`,
+			{},
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 预演精神模型刷新（只算不落库）：看这次刷新会得到什么。 */
+	async dryRunRefreshMentalModel(id, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/dry-run-refresh`,
+			{},
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
 	// ────────────────────────── HTTP 工具 ──────────────────────────
 
 	async patchJson(path, body, { signal, timeoutMs } = {}) {
@@ -533,6 +629,11 @@ export class HindsightMemoryClient {
 			signal,
 			timeoutMs,
 		});
+		return this.parse(response);
+	}
+
+	async deleteJson(path, { signal, timeoutMs } = {}) {
+		const response = await this.fetchWithTimeout(path, { method: "DELETE", signal, timeoutMs });
 		return this.parse(response);
 	}
 

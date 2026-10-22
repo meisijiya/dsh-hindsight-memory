@@ -306,6 +306,30 @@ memory_initiative list → ok, count=1, markers=[]（标记事实异步落库，
 
 `knowledgePages: false` 可整体关掉这一层（工具在 apply 时决定是否注册，见「缓存稳定性」）。
 
+## 维护（不只是增：可改、可退役、可纠正）
+
+Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalidated"`）与可回滚改写。所以「维护」不是额外功能，而是记忆系统的必需品：写错的事实如果只能靠再写一条去覆盖，旧错事实仍会参与召回，认知错位就是这么积累出来的。
+
+本插件把维护做成 `memory_hygiene` 的动作集（**不新增工具**，工具总数仍是 9）：
+
+| action | 作用 | 落点 | 破坏性 |
+|---|---|---|---|
+| `audit` | 六类体检：事实总数 / 陈旧 / 被取代 / 孤儿 observation / 近重复 / 空知识页 / 卡住任务 | 只读 | 否 |
+| `retract` | 软退役一批事实（`state=invalidated` + reason） | 事实层 | **是** |
+| `restore` | 把已退役事实改回 `valid` | 事实层 | 是 |
+| `correct` | 改写事实正文 | 事实层 | 是 |
+| `supersede` | 新事实写入 + 旧事实软退役 | 事实层 | 是 |
+
+护栏（`src/maintenance.js` 的 `guardAction`）：
+
+- 需要确认的动作缺 `confirm=true` ⇒ 直接返回 `{ok:false,error:"confirm_required"}`，**不出计划、不落手**。
+- 需要理由的动作缺 `reason` ⇒ 返回 `{ok:false,error:"reason_required"}`。
+- 退役是**可逆的**：`restore` 能把 `invalidated` 改回 `valid`——「删错」有回头路。
+
+配置：`maintenanceStaleDays`（默认 180，陈旧判定）、`maintenanceStuckMinutes`（默认 30，卡住任务判定）、`maintenanceRequireConfirm`（默认 true；不建议关）。
+
+> 实测提醒：`GET /memories/{id}/history` 目前返回空数组（服务端还没记变更历史），所以「这条记忆什么时候被改的」只能看 `edited_at`；另外 `correct` 会让服务端重新嵌入该事实并**丢弃它派生的 observation**（宁可少一条观察，也不要留一条错的）。
+
 ## 开发
 
 ```bash
@@ -356,3 +380,4 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
 | 0.4.0 | 对齐 omp 报告：新增**精神模型**层（`memory_mental_models`）+ **运维观测**（`memory_operations`）+ `memory_status` 的 bank 体检与队列体检；`memory_hygiene` 支持按层 `scope`；写入补本地时区 `timestamp` + `metadata.session_id`；自动留存对齐 omp 的 `retainEveryNTurns=3`（原来每轮都写，项目层被灌到 137 条） |
 | 0.5.0 | 搬入**知识页**层（`memory_pages`）与 **initiative** 登记（`memory_initiative`）：服务端 `/knowledge-base` 原生能力，产出盖项目标签、不复用 `source:`/`harness:`、写入 async + `metadata.session_id`；新增 `src/pages.js` + 13 条单测；配置 `knowledgePages` 可整体关掉 |
+| 0.6.0 | **维护层**：记忆不只增——`memory_hygiene` 新增 `audit`/`retract`/`restore`/`correct`/`supersede`（维护并入既有工具，工具总数仍 9）；破坏性动作必须 `confirm=true` 且带 `reason`；退役可逆（`restore` 改回 `valid`）；新增 `src/maintenance.js` + 13 条单测；配置 `maintenanceStaleDays`/`maintenanceStuckMinutes`/`maintenanceRequireConfirm`；修 `hygiene.js` 的 `recency()`（此前去重时保留的是扫描序第一条而非最新一条） |

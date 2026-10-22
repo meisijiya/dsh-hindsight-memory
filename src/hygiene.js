@@ -71,7 +71,15 @@ export function dupSignature(fact) {
 
 /** 事实的新旧排序依据（越新越靠前）。 */
 function recency(fact) {
-	const raw = fact?.updated_at ?? fact?.created_at ?? fact?.timestamp ?? fact?.stored_at ?? "";
+	// 成员对象由 findDuplicateGroups 产出，用驼峰键；服务端原对象用下划线键。
+	const raw =
+		fact?.updated_at ??
+		fact?.updatedAt ??
+		fact?.created_at ??
+		fact?.createdAt ??
+		fact?.timestamp ??
+		fact?.stored_at ??
+		"";
 	const value = typeof raw === "number" ? raw : Date.parse(String(raw));
 	return Number.isFinite(value) ? value : 0;
 }
@@ -141,6 +149,7 @@ export function findDuplicateGroups(
 						tags: Array.isArray(fact?.tags) ? fact.tags : [],
 						factType: factType(fact),
 						createdAt: fact?.created_at ?? fact?.stored_at ?? null,
+					updatedAt: fact?.updated_at ?? null,
 						context: fact?.context ?? null,
 					})),
 				});

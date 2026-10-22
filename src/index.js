@@ -21,9 +21,16 @@ import { normalizeConfig } from "./config.js";
 import { LiveConfig } from "./schema.js";
 import { resolveProjectLabel } from "./label.js";
 import { HindsightMemoryClient } from "./client.js";
-import { SCOPE, TIER, computeBankScope } from "./parity.js";
+import { SCOPE, TIER, computeBankScope, localTimestamp, tierOf } from "./parity.js";
 import { normalizeScope, sanitizeMemoryText, sanitizeTags } from "./sanitize.js";
 import { findDuplicateGroups, planPrune, summarizeGroups, filterByScope, describeLayers } from "./hygiene.js";
+import {
+	auditPlan,
+	correctionPatch,
+	guardAction,
+	restorePatch,
+	supersedePatch,
+} from "./maintenance.js";
 import {
 	mentalModelIds,
 	mentalModelSpecs,
@@ -225,6 +232,44 @@ function candidateStrategies(config) {
 			max_observations_per_scope: config.hygieneProjectMaxObservations,
 		},
 	];
+}
+
+/**
+ * 维护动作的护栏：破坏性动作必须显式 confirm=true，部分动作还必须写 reason。
+ *
+ * 🔴 顺序：先确认、再要理由 —— 两者不满足时**一个服务端请求都不发**。
+ *
+ * @param {string} toolName 工具名（用于报错文案）。
+ * @param {string} action 动作名。
+ * @param {object} args 工具参数。
+ * @param {object} config 归一化配置。
+ * @returns {{ok: false, error: string, message: string}|null} 通过时返回 null。
+ */
+function maintenanceGuard(toolName, action, args, config) {
+	const verdict = guardAction({
+		action,
+		confirm: args?.confirm,
+		reason: args?.reason,
+		requireConfirm: config?.maintenanceRequireConfirm !== false,
+	});
+	if (!verdict) return null;
+	return { ok: false, error: verdict.error, message: `${toolName} ${verdict.message}` };
+}
+
+/**
+ * 维护写入的公共附加字段：本地时间戳 + session_id。
+ *
+ * 🔴 与 retain() 同口径：parity.js 的 buildRetainPayload 用的就是这两个字段。
+ *    服务端会忽略 PATCH 体里的多余字段，但留下痕迹便于事后追溯。
+ *
+ * @param {object} exec 工具执行上下文。
+ * @returns {{timestamp: string, metadata: {session_id: string|null}}}
+ */
+function maintenanceStamp(exec) {
+	return {
+		timestamp: localTimestamp(),
+		metadata: { session_id: exec?.agent?.id ?? null },
+	};
 }
 
 /**
@@ -559,14 +604,27 @@ export async function apply(ctx, rawConfig = {}) {
 		{
 			name: "memory_hygiene",
 			description:
-				"整理共享记忆库（DSH 与 omp 同一个 bank，改一处两端同时见效）。scope 选层：project=本项目层，global=跨项目全局层（无 tag，所有项目可见），other=其它项目层，all=整库。action=preview 只读地列出近重复事实与各层分布；action=layers 只读地给出每层的条数、事实类型分布与最近更新时间；action=prune 作废近重复事实（每组保留最新一条，服务端可逆：state 可改回 valid）；action=consolidate 触发服务端合并 observation；action=scopes 查看各层 observation 数量；action=strategies-preview 预览分层口径的命中情况。",
+				"整理共享记忆库（DSH 与 omp 同一个 bank，改一处两端同时见效）。scope 选层：project=本项目层，global=跨项目全局层（无 tag，所有项目可见），other=其它项目层，all=整库。action=preview 只读地列出近重复事实与各层分布；action=layers 只读地给出每层的条数、事实类型分布与最近更新时间；action=prune 作废近重复事实（每组保留最新一条，服务端可逆：state 可改回 valid）；action=audit 只读体检（陈旧、被取代、孤儿 observation、空知识页、卡住任务）；action=retract 软退役一条事实（服务端可逆：state 可改回 valid）；action=restore 恢复一条被退役的事实；action=correct 改写一条事实的正文（服务端重新嵌入并丢弃派生 observation）；action=supersede 先留存新事实再退役旧事实；action=consolidate 触发服务端合并 observation；action=scopes 查看各层 observation 数量；action=strategies-preview 预览分层口径的命中情况。🔴 破坏性动作必须显式 confirm=true；retract / correct / supersede 还必须写 reason。",
 			parameters: {
 				type: "object",
 				properties: {
 					action: {
 						type: "string",
-						enum: ["preview", "layers", "prune", "consolidate", "scopes", "strategies-preview"],
-						description: "要执行的整理动作，默认 preview（只读）。layers 只读地给出每层的条数、类型分布与最近更新时间。",
+						enum: [
+							"preview",
+							"layers",
+							"prune",
+							"audit",
+							"retract",
+							"restore",
+							"correct",
+							"supersede",
+							"consolidate",
+							"scopes",
+							"strategies-preview",
+						],
+						description:
+							"要执行的整理动作，默认 preview（只读）。layers 只读地给出每层的条数、类型分布与最近更新时间。audit 只读体检。retract / restore / correct / supersede 改单条事实（破坏性动作要 confirm=true）。",
 					},
 					scope: {
 						type: "string",
@@ -584,6 +642,26 @@ export async function apply(ctx, rawConfig = {}) {
 					limit: {
 						type: "number",
 						description: "扫描的事实条数上限，默认取插件配置。",
+					},
+					factId: {
+						type: "string",
+						description: "维护目标事实 id（retract / restore / correct / supersede 必填）。",
+					},
+					text: {
+						type: "string",
+						description: "correct 用的新正文（服务端会重新嵌入并丢弃派生 observation）。",
+					},
+					newContent: {
+						type: "string",
+						description: "supersede 用的新事实正文（先留存，再退役旧事实）。",
+					},
+					reason: {
+						type: "string",
+						description: "维护理由（retract / correct / supersede 必填，会写进服务端留痕）。",
+					},
+					confirm: {
+						type: "boolean",
+						description: "破坏性动作必须显式传 true 才落手（默认 false＝只出计划不执行）。",
 					},
 				},
 				required: [],
@@ -608,6 +686,181 @@ export async function apply(ctx, rawConfig = {}) {
 							signal: exec?.signal,
 						});
 						return toolJson({ ok: true, action, bankId: client.bankId, preview });
+					}
+
+					// ── 维护层（v0.6.0）：先确认、再要理由，两者不满足都不碰服务端 ──
+					if (
+						action === "audit" ||
+						action === "retract" ||
+						action === "restore" ||
+						action === "correct" ||
+						action === "supersede"
+					) {
+						const guardError = maintenanceGuard("memory_hygiene", action, args, config);
+						if (guardError) return toolJson(guardError);
+					}
+
+					if (action === "audit") {
+						const staleDays = Number.isFinite(Number(args?.staleDays))
+							? Math.max(1, Math.trunc(Number(args.staleDays)))
+							: config.maintenanceStaleDays;
+						const stuckMinutes = Number.isFinite(Number(args?.stuckMinutes))
+							? Math.max(1, Math.trunc(Number(args.stuckMinutes)))
+							: config.maintenanceStuckMinutes;
+						const [raw, tree, opsRaw] = await Promise.all([
+							client.listFacts({ limit: config.hygieneMaxFacts, signal: exec?.signal }),
+							config.knowledgePages
+								? client.listKnowledgeTree({ signal: exec?.signal }).catch(() => null)
+								: Promise.resolve(null),
+							client.listOperations({ limit: config.operationsLimit, signal: exec?.signal }).catch(
+								() => null,
+							),
+						]);
+						const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
+						const operations = opsRaw?.operations ?? (Array.isArray(opsRaw) ? opsRaw : []);
+						const scopeTags = computeBankScope(config, channel.label).retainTags ?? [];
+						const treePages = tree ? flattenTree(tree).pages : [];
+						const scopedPages = filterPagesByScope(treePages, scopeTags);
+						// 树节点没有正文 ⇒ 要逐页读一次才知道是不是空页（读失败的页不计入）。
+						const details = await Promise.all(
+							scopedPages.slice(0, 20).map(async (page) => {
+								try {
+									const detail = await client.readKnowledgePage(page.id, {
+										signal: exec?.signal,
+									});
+									return {
+										id: page.id,
+										name: page.name,
+										markdown: detail?.markdown ?? detail?.body ?? detail?.content ?? "",
+									};
+								} catch {
+									return null;
+								}
+							}),
+						);
+						const plan = auditPlan({
+							facts,
+							pages: details.filter(Boolean),
+							operations,
+							now: Date.now(),
+							staleDays,
+							stuckMinutes,
+							threshold: config.hygieneThreshold,
+						});
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							staleDays,
+							stuckMinutes,
+							counts: plan.counts,
+							groups: plan.groups,
+							note: "audit 是只读体检：不改任何记忆，也不调用任何写接口。",
+						});
+					}
+
+					if (
+						action === "retract" ||
+						action === "restore" ||
+						action === "correct" ||
+						action === "supersede"
+					) {
+						const factId = String(args?.factId ?? "").trim();
+						if (!factId) {
+							return toolJson({
+								ok: false,
+								error: "fact_id_required",
+								message: `memory_hygiene ${action} 需要 factId。`,
+							});
+						}
+						const reason = String(args?.reason ?? "").trim();
+						const stamp = maintenanceStamp(exec);
+						if (action === "restore") {
+							const patch = restorePatch({ factId });
+							const updated = await client.updateFact(factId, { ...patch, ...stamp });
+							return toolJson({
+								ok: true,
+								action,
+								bankId: client.bankId,
+								factId,
+								state: "valid",
+								result: updated,
+							});
+						}
+						if (action === "retract") {
+							const patch = supersedePatch({ factId, reason });
+							const updated = await client.updateFact(factId, { ...patch, ...stamp });
+							return toolJson({
+								ok: true,
+								action,
+								bankId: client.bankId,
+								factId,
+								state: "invalidated",
+								reason,
+								result: updated,
+							});
+						}
+						if (action === "correct") {
+							const patch = correctionPatch({ factId, text: args?.text, reason });
+							if (!patch) {
+								return toolJson({
+									ok: false,
+									error: "text_required",
+									message: "memory_hygiene correct 需要 text（新正文）。",
+								});
+							}
+							const updated = await client.updateFact(factId, { ...patch, ...stamp });
+							return toolJson({
+								ok: true,
+								action,
+								bankId: client.bankId,
+								factId,
+								reason,
+								result: updated,
+								note: "服务端会重新嵌入这条事实，并丢弃它的派生 observation。",
+							});
+						}
+						// supersede：先留存新事实，再退役旧事实（顺序不能反）。
+						const newContent = String(args?.newContent ?? "").trim();
+						if (!newContent) {
+							return toolJson({
+								ok: false,
+								error: "new_content_required",
+								message: "memory_hygiene supersede 需要 newContent（新事实正文）。",
+							});
+						}
+						const raw = await client.listFacts({
+							limit: config.hygieneMaxFacts,
+							signal: exec?.signal,
+						});
+						const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
+						const oldFact = facts.find((fact) => String(fact?.id ?? "") === factId);
+						const tier = oldFact ? tierOf(oldFact) : TIER.PROJECT;
+						// retain() 内部走 parity.js 的 buildRetainPayload（带 timestamp + metadata.session_id）。
+						const retained = await client.retain({
+							content: newContent,
+							tier,
+							context: reason,
+							sessionId: exec?.agent?.id,
+							signal: exec?.signal,
+						});
+						const patch = supersedePatch({ factId, reason });
+						const updated = await client.updateFact(factId, { ...patch, ...stamp });
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							factId,
+							reason,
+							tier,
+							retained: {
+								operationId: retained?.operation_id ?? retained?.id ?? null,
+								content: newContent,
+							},
+							result: updated,
+							note: "先留存新事实，再把旧事实软退役（state=invalidated，服务端可逆）。",
+						});
 					}
 
 					const threshold = Number.isFinite(Number(args?.threshold))
@@ -710,12 +963,13 @@ export async function apply(ctx, rawConfig = {}) {
 				properties: {
 					action: {
 						type: "string",
-						enum: ["ensure", "list", "content", "refresh", "patch"],
-						description: "要执行的动作，默认 list。",
+						enum: ["ensure", "list", "content", "refresh", "patch", "delete", "clear", "dry-run"],
+						description:
+							"要执行的动作，默认 list。delete 删模型、clear 清空正文（都不可逆，必须 confirm=true）；dry-run 预演一次刷新（只算不落库）。",
 					},
 					id: {
 						type: "string",
-						description: "目标模型 id（refresh / patch 必填；content 留空则取全部）。",
+						description: "目标模型 id（refresh / patch / delete / clear / dry-run 必填；content 留空则取全部）。",
 					},
 					content: {
 						type: "string",
@@ -725,6 +979,10 @@ export async function apply(ctx, rawConfig = {}) {
 						type: "array",
 						items: { type: "string" },
 						description: "patch 时的新标签。",
+					},
+					confirm: {
+						type: "boolean",
+						description: "破坏性动作（delete / clear）必须显式传 true 才落手。",
 					},
 				},
 				required: [],
@@ -840,6 +1098,39 @@ export async function apply(ctx, rawConfig = {}) {
 						return toolJson({ ok: true, action, bankId: client.bankId, id, patch, result: updated });
 					}
 
+					if (action === "delete" || action === "clear") {
+						const guardError = maintenanceGuard("memory_mental_models", action, args, config);
+						if (guardError) return toolJson(guardError);
+						const id = String(args?.id ?? "").trim();
+						if (!id) {
+							return toolJson({
+								ok: false,
+								error: "id_required",
+								message: `memory_mental_models ${action} 需要 id。`,
+							});
+						}
+						const result =
+							action === "delete"
+								? await client.deleteMentalModel(id, { signal: exec?.signal })
+								: await client.clearMentalModel(id, { signal: exec?.signal });
+						return toolJson({ ok: true, action, bankId: client.bankId, id, result });
+					}
+
+					if (action === "dry-run") {
+						const id = String(args?.id ?? "").trim();
+						if (!id) {
+							return toolJson({
+								ok: false,
+								error: "id_required",
+								message: "memory_mental_models dry-run 需要 id。",
+							});
+						}
+						const result = await client.dryRunRefreshMentalModel(id, {
+							signal: exec?.signal,
+						});
+						return toolJson({ ok: true, action, bankId: client.bankId, id, result });
+					}
+
 					return toolError(`memory_mental_models 不支持的动作：${action}`);
 				} catch (error) {
 					log(`memory_mental_models failed: ${error?.message ?? error}`);
@@ -900,18 +1191,22 @@ export async function apply(ctx, rawConfig = {}) {
 		{
 			name: "memory_pages",
 			description:
-				"知识页（knowledge pages）层：服务端合成的长文，比零散事实更像「章节」。action=list 列知识库树；action=search 检索页（服务端 BM25+向量融合，按本项目标签过滤）；action=read 读一页正文；action=create 建一页（服务端按 source_query 异步合成正文，产出自动盖本项目标签，因此 omp 也能看到）。",
+				"知识页（knowledge pages）层：服务端合成的长文，比零散事实更像「章节」。action=list 列知识库树；action=search 检索页（服务端 BM25+向量融合，按本项目标签过滤）；action=read 读一页正文；action=create 建一页（服务端按 source_query 异步合成正文，产出自动盖本项目标签，因此 omp 也能看到）；action=update 改一页的标题/取数问题/标签/上限；action=delete 删一页（不可逆，必须 confirm=true）。",
 			parameters: {
 				type: "object",
 				properties: {
 					action: {
 						type: "string",
-						enum: ["list", "search", "read", "create"],
-						description: "要执行的动作，默认 list。",
+						enum: ["list", "search", "read", "create", "update", "delete"],
+						description: "要执行的动作，默认 list。delete 不可逆，必须 confirm=true。",
 					},
 					id: {
 						type: "string",
-						description: "read 的目标页 id。",
+						description: "read 的目标页 id（update / delete 用 pageId，也兼容 id）。",
+					},
+					pageId: {
+						type: "string",
+						description: "update / delete 的目标页 id（留空则取 id）。",
 					},
 					query: {
 						type: "string",
@@ -928,6 +1223,23 @@ export async function apply(ctx, rawConfig = {}) {
 					limit: {
 						type: "number",
 						description: "search 返回条数，默认取插件配置。",
+					},
+					name: {
+						type: "string",
+						description: "update 时的新标题。",
+					},
+					tags: {
+						type: "array",
+						items: { type: "string" },
+						description: "update 时的新标签（决定这页从哪些记忆生成）。",
+					},
+					maxTokens: {
+						type: "number",
+						description: "update 时的正文合成上限（服务端硬下限 256）。",
+					},
+					confirm: {
+						type: "boolean",
+						description: "破坏性动作（delete）必须显式传 true 才落手。",
 					},
 				},
 				required: [],
@@ -1019,6 +1331,71 @@ export async function apply(ctx, rawConfig = {}) {
 							pageId: created?.id ?? created?.page_id ?? null,
 							operationId: created?.operation_id ?? null,
 							request,
+						});
+					}
+
+					if (action === "update") {
+						const pageId = String(args?.pageId ?? args?.id ?? "").trim();
+						if (!pageId) {
+							return toolJson({
+								ok: false,
+								error: "page_id_required",
+								message: "memory_pages update 需要 pageId。",
+							});
+						}
+						const patch = {};
+						if (typeof args?.name === "string" && args.name.trim()) {
+							patch.name = args.name.trim();
+						}
+						if (typeof args?.sourceQuery === "string" && args.sourceQuery.trim()) {
+							patch.source_query = args.sourceQuery.trim();
+						}
+						if (Array.isArray(args?.tags)) {
+							patch.tags = args.tags.map((tag) => String(tag));
+						}
+						if (Number.isFinite(Number(args?.maxTokens))) {
+							patch.max_tokens = Math.max(256, Math.trunc(Number(args.maxTokens)));
+						}
+						if (Object.keys(patch).length === 0) {
+							return toolJson({
+								ok: false,
+								error: "nothing_to_update",
+								message:
+									"memory_pages update 需要 name / sourceQuery / tags / maxTokens 至少一项。",
+							});
+						}
+						const updated = await client.updateKnowledgeNode(pageId, patch, {
+							signal: exec?.signal,
+						});
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							pageId,
+							patch,
+							result: updated,
+						});
+					}
+
+					if (action === "delete") {
+						const guardError = maintenanceGuard("memory_pages", action, args, config);
+						if (guardError) return toolJson(guardError);
+						const pageId = String(args?.pageId ?? args?.id ?? "").trim();
+						if (!pageId) {
+							return toolJson({
+								ok: false,
+								error: "page_id_required",
+								message: "memory_pages delete 需要 pageId。",
+							});
+						}
+						const result = await client.deleteKnowledgeNode(pageId, { signal: exec?.signal });
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							pageId,
+							result,
+							note: "知识页删除不可逆（不像事实层可以改回来）。",
 						});
 					}
 
@@ -1155,11 +1532,10 @@ export async function apply(ctx, rawConfig = {}) {
 	// 知识页层可整体关掉（配置 knowledgePages=false）——工具的**数量**必须在 apply 时定，
 	// 不能中途增删：工具 schema 在请求头缓存前缀内，增删会让无 toolUpdate 能力的
 	// 适配器重开请求序列 ⇒ 缓存作废。
-	const activeTools = config.knowledgePages
-		? tools
-		: tools.filter(
-				(tool) => tool.name !== "memory_pages" && tool.name !== "memory_initiative",
-			);
+	const activeTools = tools.filter((tool) => {
+		if (tool.name === "memory_pages" || tool.name === "memory_initiative") return config.knowledgePages;
+		return true;
+	});
 
 	for (const tool of activeTools) {
 		try {

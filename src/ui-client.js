@@ -328,6 +328,30 @@ window.__ModuleLoader__.load({
 				default: "Initiatives",
 				doc: "initiative（正在做的事）页存放的文件夹名。",
 			},
+			{
+				group: "维护",
+				key: "maintenanceStaleDays",
+				label: "陈旧阈值（天）",
+				type: "number",
+				default: 180,
+				doc: "updated_at 距今超过这个天数就算陈旧候选。",
+			},
+			{
+				group: "维护",
+				key: "maintenanceStuckMinutes",
+				label: "卡住阈值（分钟）",
+				type: "number",
+				default: 30,
+				doc: "pending/processing 超过这个分钟数算卡住任务。",
+			},
+			{
+				group: "维护",
+				key: "maintenanceRequireConfirm",
+				label: "破坏性动作需确认",
+				type: "boolean",
+				default: true,
+				doc: "退役/纠正/删除等动作必须显式 confirm=true 才落手。",
+			},
 		];
 
 		const GROUPS = [
@@ -338,6 +362,7 @@ window.__ModuleLoader__.load({
 			"记忆卫生",
 			"精神模型",
 			"知识页",
+			"维护",
 			"运维",
 			"进阶",
 		];

@@ -89,6 +89,12 @@ export const DEFAULTS = {
 	pageMaxTokens: 2000,
 	/** initiative 页存放的文件夹名。 */
 	initiativeFolder: "Initiatives",
+	/** 陈旧判定阈值（天）：updated_at 距今超过这个天数就算陈旧候选。 */
+	maintenanceStaleDays: 180,
+	/** 卡住判定阈值（分钟）：pending/processing 超过这个分钟数算卡住。 */
+	maintenanceStuckMinutes: 30,
+	/** 破坏性动作是否必须显式 confirm=true（保守默认：开）。 */
+	maintenanceRequireConfirm: true,
 };
 
 const BUDGETS = new Set(["low", "mid", "high"]);
@@ -213,5 +219,8 @@ export function normalizeConfig(raw = {}) {
 		// 服务端硬性要求 max_tokens >= 256，否则 422 greater_than_equal。
 		pageMaxTokens: int(raw.pageMaxTokens, DEFAULTS.pageMaxTokens, 256, 8_000),
 		initiativeFolder: str(raw.initiativeFolder, DEFAULTS.initiativeFolder),
+		maintenanceStaleDays: int(raw.maintenanceStaleDays, DEFAULTS.maintenanceStaleDays, 1, 3650),
+		maintenanceStuckMinutes: int(raw.maintenanceStuckMinutes, DEFAULTS.maintenanceStuckMinutes, 1, 1440),
+		maintenanceRequireConfirm: bool(raw.maintenanceRequireConfirm, DEFAULTS.maintenanceRequireConfirm),
 	};
 }

@@ -897,3 +897,54 @@ DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只�
 2. **项目标签取自工作目录**：验收时 headless 是在 `C:\Users\22923` 下跑的（不是 git 仓库），
    于是标签退化成 `project:22923` —— 这是 `label.js` 的**正确降级**（basename(cwd).toLowerCase()），
    但意味着**在非项目目录里跑插件会污染项目层标签**。验证必须在真实项目目录里跑。
+
+## 27. v0.6.0：维护层——记忆必须可维护，不只增
+
+### 27.1 问题
+用户诉求（2026-10-22）：「知识页包括各种 hindsight 中的记忆功能要确保能够维护，即不要只增，不然错误记忆积累起来会造成认知错位。DSH 这边做好即可。omp 那边……我们 DSH 插件就要严谨对待了，这是我们个人开发的。」
+
+到 v0.5.0 为止，本插件只有「写」和「读」：写进 bank 的东西没有出得去的路径。事实一旦写错，只能靠"再写一条对的"去覆盖——但服务端**不做去重**，旧错事实仍然参与召回。认知错位就是这么积累出来的。
+
+### 27.2 服务端可维护性的真相（openapi + 实测）
+- 事实层**没有 DELETE 端点**：`DELETE /v1/default/banks/{bank}/memories/{id}` 不存在；只有 `PATCH .../memories/{id}` 带 `state:"invalidated"`（软退役）＋`reason`。`state` 可改回 `"valid"` ⇒ 退役是**可逆**的。
+- `PATCH .../memories/{id}` 可改 `text`；服务端会**重新嵌入**这条事实并**丢弃它派生的 observation**（纠正事实会连带清掉旧观察结论——宁可少一条观察，也不要留一条错的）。
+- `GET .../memories/{id}/history` 端点存在，但**当前返回空数组**：服务端还没记录变更历史 ⇒ "什么时候被改的"只能看 `edited_at`。
+- 知识页层可改可删：`PATCH`/`DELETE .../knowledge-base/nodes/{node_id}`。
+- 精神模型层可改可删可清空：`PATCH`/`DELETE .../mental-models/{id}`、`POST .../mental-models/{id}/clear`。
+- 写入前预演：`POST .../memories/dry-run-extract`，body 是**根级 `content` + `context`**（不是 `{items:[...]}`——那是 `/memories` 的形状；踩过 422 `{"type":"missing","loc":["body","content"]}`）。
+
+### 27.3 落点：维护并入 `memory_hygiene`，不新增工具
+公共 API = 工具名 + 配置键。`memory_hygiene` 已有 hygiene 语义（分层 / 去重 / 退役），维护是它的自然延伸 ⇒ **新增动作而不是新工具**，工具总数保持 9，模型侧协议不用改。
+
+| action | 作用 | 落点 | 需要 confirm | 需要 reason |
+|---|---|---|---|---|
+| `audit` | 六类体检：事实总数、陈旧（超 `maintenanceStaleDays`）、被取代、孤儿 observation、近重复、空知识页、卡住任务 | 只读 | 否 | 否 |
+| `retract` | 软退役一批事实（`state=invalidated` + reason） | 事实层 | 是 | 是 |
+| `restore` | 把已退役事实改回 `valid` | 事实层 | 是 | 否 |
+| `correct` | 改写事实正文 | 事实层 | 是 | 是 |
+| `supersede` | 新事实写入 + 旧事实软退役 | 事实层 | 是 | 是 |
+
+### 27.4 护栏（`src/maintenance.js` → `guardAction`）
+- `requiresConfirm` 的动作缺 `confirm === true` ⇒ 返回 `{ok:false,error:"confirm_required",message:…}`，**不出计划、不落手**。
+- `requiresReason` 的动作缺 `reason` ⇒ `{ok:false,error:"reason_required"}`。
+- `maintenanceRequireConfirm:false` 可全局关掉二次确认（默认 true，不建议关）。
+- 退役可逆 ⇒ "删错"有回头路。
+
+### 27.5 活体验收（旁路 `dsh headless --patch`，真跑）
+1. `audit` → `{"ok":true,"counts":{"facts":312,"pages":0,"operations":20,"stale":0,"orphanObservations":0,"superseded":0,"duplicates":0,"duplicateFacts":0,"emptyPages":0,"stuckOperations":…}}`（headless 跑在 `C:\Users\22923` 非 git 仓库 ⇒ 标签退化为 `project:22923`，label.js 的正确降级）。
+2. `retract` 不带 confirm → `{"ok":false,"error":"confirm_required","message":"memory_hygiene retract 是破坏性动作，必须显式传 confirm=true（否则只出计划不落手）"}` ⇒ **护栏生效**。
+3. `correct`（text + reason + confirm）→ `{"ok":true,"text":"MAINTPROBE corrected by memory_hygiene tool.","edited_at":"2026-10-22T13:20:06Z"}`。
+4. `restore` → `{"ok":true,"state":"valid","invalidation_reason":null,"invalidated_at":null}`。
+5. 探针事实收尾作废（`state=invalidated` + reason）——探针不留痕。
+
+### 27.6 已知限制（诚实账）
+- `history` 返回空 ⇒ 没有服务端侧变更审计，只有 `edited_at`。
+- `correct` 会丢弃派生 observation ⇒ 纠正后观察层结论会变少（可接受）。
+- 卡住任务（`refresh_mental_model` 长期 processing）**只能观察**，本插件不代劳清理（那属于宿主运维动作）。
+- 近重复判定是**类型感知**的：world 与 observation 的同文不算重复（后者是服务端的归纳结论，删了等于删归纳成果）。
+
+### 27.7 与 omp 的差异账
+omp 用官方原生后端，工具面只有事实的增与查；**维护（改 / 退役 / 纠正）不在 omp 的工具面里**。本插件把它们补齐，是"个人开发要更严谨"的直接落点——但也意味着这块只有我们在维护，所以差异写在这里，不藏起来。
+
+### 27.8 本轮同时修掉的静默偏差
+`src/hygiene.js` 的 `recency(fact)` 原本只读下划线时间键（`updated_at`/`created_at`/`timestamp`/`stored_at`），而 `findDuplicateGroups` 产出的成员用的是驼峰 `createdAt` ⇒ `planPrune` 实际"保留扫描序第一条"而不是"最新一条"。修法：recency 依次读 `updated_at → updatedAt → created_at → createdAt → timestamp → stored_at`；成员映射补 `updatedAt: fact?.updated_at ?? null`。

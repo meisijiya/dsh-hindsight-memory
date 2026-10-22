@@ -1,0 +1,16 @@
+# dsh-hindsight-memory 编辑器统一配置
+#
+# 为什么要这份文件：仓库源码（src/、test/、scripts/）统一使用 tab 缩进。
+# 不同编辑器的默认行为不一致（空格缩进 / CRLF / 自动 BOM），
+# 同一个文件在不同机器上被改写成两种风格，diff 全是噪声，评审成本反而升高。
+# 这里把编码、换行、缩进、末尾空行、尾随空格一次性钉死。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = tab
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true

@@ -1,0 +1,130 @@
+# dsh-hindsight-memory —— 持续集成
+#
+# 两条流水线：
+#   (a) 单元与契约测试：checkout → setup-node 22 → 装依赖 → node --test "test/*.test.js"
+#   (b) 插件市场索引校验：node scripts/validate-market-index.mjs
+#       若失败原因是宿主侧可选依赖缺失（ERR_MODULE_NOT_FOUND 等），
+#       退化为 node --check scripts/validate-market-index.mjs 语法兜底；
+#       若是索引内容本身不合规（如 commit 不是 40 位小写 hex），一律让流水线失败。
+#
+# 约定：
+#   - Node 版本对齐 package.json 的 engines.node（>=22.6.0），CI 固定用 22.x。
+#   - 权限最小化：只读的 contents，不给任何写权限。
+#   - 并发组：同一分支的新推送取消旧构建，避免队列堆积。
+#   - npm 缓存：手动缓存 ~/.npm，不依赖 lockfile 的存在（仓库当前用 pnpm-lock.yaml，
+#     没有 package-lock.json，setup-node 的 cache: npm 会直接报错）。
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "fix/**"
+      - "docs/**"
+      - "test/**"
+      - "refactor/**"
+      - "perf/**"
+      - "chore/**"
+      - "ci/**"
+      - "build/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: (a) 单元与契约测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 缓存 npm 缓存目录
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('package-lock.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+
+      - name: 安装依赖（存在 package-lock.json 用 npm ci，否则 npm install）
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: 语法检查（src/*.js 必须能被 Node 解析）
+        run: |
+          for f in src/*.js; do
+            node --check "$f"
+          done
+
+      - name: 单元与契约测试
+        run: node --test "test/*.test.js"
+
+  market-index:
+    name: (b) 插件市场索引校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 缓存 npm 缓存目录
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('package-lock.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+
+      - name: 安装依赖（存在 package-lock.json 用 npm ci，否则 npm install）
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: 校验 index.json（依赖缺失时退化为语法兜底）
+        run: |
+          log=$(mktemp)
+          if node scripts/validate-market-index.mjs >"$log" 2>&1; then
+            cat "$log"
+            exit 0
+          fi
+          cat "$log"
+          if grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module|Cannot find package|MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED' "$log"; then
+            echo "::warning::索引语义校验所需的宿主侧可选依赖缺失，退化为 node --check 语法兜底；索引内容契约由 test/market-index.test.js 兜底。"
+            node --check scripts/validate-market-index.mjs
+            exit 0
+          fi
+          echo "::error::index.json 未通过市场索引校验（不是依赖缺失导致）。"
+          exit 1
