@@ -538,6 +538,14 @@ export class HindsightMemoryClient {
 		);
 	}
 
+	/** 读一条事实的详情（含 source_memory_ids、fact_type）。 */
+	async getFact(id, { signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/${encodeSegment(id)}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
 	/**
 	 * 写入前预演抽取（不落库）。
 	 *

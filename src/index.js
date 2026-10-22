@@ -27,7 +27,9 @@ import { findDuplicateGroups, planPrune, summarizeGroups, filterByScope, describ
 import {
 	auditPlan,
 	correctionPatch,
+	describeSources,
 	guardAction,
+	isObservationCurationError,
 	restorePatch,
 	supersedePatch,
 } from "./maintenance.js";
@@ -809,7 +811,28 @@ export async function apply(ctx, rawConfig = {}) {
 									message: "memory_hygiene correct 需要 text（新正文）。",
 								});
 							}
-							const updated = await client.updateFact(factId, { ...patch, ...stamp });
+							let updated;
+							try {
+								updated = await client.updateFact(factId, { ...patch, ...stamp });
+							} catch (error) {
+								// 服务端只允许策展 world / experience；observation 是派生物，
+								// 改它没有意义，只能去改它的源事实。
+								const message = String(error?.message ?? error);
+								if (!isObservationCurationError(message)) throw error;
+								const source = await client.getFact(factId, { signal: exec?.signal });
+								const sources = describeSources(
+									await client.listFacts({ limit: config.hygieneMaxFacts, signal: exec?.signal }),
+									source?.source_memory_ids ?? [],
+								);
+								return toolJson({
+									ok: false,
+									error: "observation_not_curatable",
+									message:
+										"这条是 observation（派生事实），服务端不允许策展：observation 由源事实派生，只能改源事实；源事实改完后 observation 会在下次 consolidation 重新生成。",
+									factId,
+									sources,
+								});
+							}
 							return toolJson({
 								ok: true,
 								action,

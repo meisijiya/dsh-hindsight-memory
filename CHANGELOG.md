@@ -5,6 +5,13 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.6.4 — observation 不可策展时给出可操作提示（附带源事实 id）
+
+- 现场：`memory_hygiene action=correct` 打服务端直接回 `Hindsight HTTP 400: Memory 'xxx' is a observation; only world/experience facts can be curated.` —— 服务端只允许策展 world/experience，observation 是派生事实，改它没意义（会在下次 consolidation 重新派生）。旧版把这段原始 400 原样抛给使用者，看不出下一步该干什么。
+- 现在 `memory_hygiene correct` 命中这类报错会转成结构化返回：`error="observation_not_curatable"` + 中文说明 + `sources[]`（该 observation 的源事实 id / tags / 正文摘要），直接告诉使用者「去改哪几条」。源事实通过新增的 `client.getFact()`（GET `/memories/{id}`）读取。
+- 纯函数部分（`isObservationCurationError` / `describeSources`）落在 `src/maintenance.js`，不依赖服务端，可单测；新增 1 条契约测试（共 92 条全绿）。
+- 洗账路径复核过一遍：过期事实 → 改它的**源 world 事实** → 服务端重嵌入并丢弃派生 observation → 触发 consolidate → 知识页快照重算。
+
 ## 0.6.3 — MCP 会话自愈（服务端重启不再让工具链永久失效）
 
 - 修复：MCP 会话被服务端丢弃（容器重建 / session 过期）后，`initialized` 与 `mcp-session-id` 仍是旧值 ⇒ 后续每次调用恒定 404 `Session not found`，**整条工具链永久失效**，只能靠重启 DSH 恢复。

@@ -13,10 +13,12 @@ import { readFileSync } from "node:fs";
 import {
 	auditPlan,
 	correctionPatch,
+	describeSources,
 	emptyPages,
 	factTimestamp,
 	guardAction,
 	isActiveFact,
+	isObservationCurationError,
 	orphanObservations,
 	requiresConfirm,
 	requiresReason,
@@ -280,4 +282,27 @@ test("工具级护栏：破坏性动作缺 confirm / 缺 reason ⇒ 不碰服务
 	assert.equal((await call(pages, { action: "delete", pageId: "p1" })).error, "confirm_required");
 	assert.equal((await call(models, { action: "delete", id: "m1" })).error, "confirm_required");
 	assert.equal((await call(models, { action: "clear", id: "m1" })).error, "confirm_required");
+});
+
+test("observation 不可策展的报错能被识别，并指出该改哪几条源事实", () => {
+	const serverMessage =
+		"Hindsight HTTP 400: {\"detail\":\"Memory 'o1' is a observation; only world/experience facts can be curated. Observations are derived and regenerate from their sources.\"}";
+	assert.equal(isObservationCurationError(serverMessage), true);
+	assert.equal(isObservationCurationError("Hindsight HTTP 404: not found"), false);
+	assert.equal(isObservationCurationError(undefined), false);
+
+	const facts = [
+		fact("s1", "源事实一", { tags: ["project:demo"] }),
+		fact("s2", "源事实二", { tags: [] }),
+		fact("x1", "无关事实", { tags: [] }),
+	];
+	const described = describeSources(facts, ["s1", "s2", "missing"], { textLength: 5 });
+	assert.deepEqual(
+		described.map((entry) => entry.id),
+		["s1", "s2"],
+		"只应列出真实存在的源事实",
+	);
+	assert.equal(described[0].text, "源事实一");
+	assert.deepEqual(described[1].tags, []);
+	assert.deepEqual(describeSources(facts, []), [], "没有源事实时返回空数组");
 });

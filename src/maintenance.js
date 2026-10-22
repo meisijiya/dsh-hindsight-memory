@@ -592,3 +592,43 @@ export function guardAction({ action, confirm, reason, requireConfirm = true } =
 	}
 	return null;
 }
+
+/**
+ * 判断服务端拒绝是不是「observation 不可策展」。
+ *
+ * 服务端只允许策展 world / experience；observation 是由源事实派生出来的，
+ * 改它没有意义（会在下次 consolidation 重新派生），必须去改源事实。
+ *
+ * @param {unknown} message
+ * @returns {boolean}
+ */
+export function isObservationCurationError(message) {
+	const text = String(message ?? "");
+	if (!text) return false;
+	return /is a observation/i.test(text) || /only world\/experience facts can be curated/i.test(text);
+}
+
+/**
+ * 从事实列表里挑出 observation 的源事实摘要（便于告诉用户"去改哪几条"）。
+ *
+ * @param {Array<Record<string, any>>} facts
+ * @param {string[]} sourceIds
+ * @param {{limit?: number, textLength?: number}} [options]
+ * @returns {Array<{id: string, tags: string[], text: string}>}
+ */
+export function describeSources(facts, sourceIds, { limit = 8, textLength = 200 } = {}) {
+	const wanted = new Set((sourceIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean));
+	if (!wanted.size) return [];
+	const out = [];
+	for (const fact of facts ?? []) {
+		const id = String(fact?.id ?? "").trim();
+		if (!wanted.has(id)) continue;
+		out.push({
+			id,
+			tags: Array.isArray(fact?.tags) ? fact.tags : [],
+			text: String(fact?.text ?? "").slice(0, textLength),
+		});
+		if (out.length >= limit) break;
+	}
+	return out;
+}
