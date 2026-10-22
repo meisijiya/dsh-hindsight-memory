@@ -28,8 +28,8 @@
         "zh": "Hindsight 记忆（DSH）"
       },
       "description": {
-        "en": "Bridges the Hindsight memory service into DeepSeek Harness with omp-identical semantics: one shared bank, project tags stamped automatically, and four semantic tools (recall/retain/reflect/status) instead of raw MCP calls. The plugin never exposes tags or bankId to the model.",
-        "zh": "把 Hindsight 记忆服务接进 DeepSeek Harness，行为与 omp 一致：同一个记忆库、项目标签自动盖章、模型只看见 recall/retain/reflect/status 四个语义化工具，看不到裸 MCP 工具，也碰不到 tags 与 bankId。"
+        "en": "Bridges the Hindsight memory service into DeepSeek Harness with omp-identical semantics: one shared bank, project tags stamped automatically, five semantic tools (recall/retain/reflect/status/hygiene) instead of raw MCP calls, plus a memory-hygiene layer that keeps the shared bank deduplicated for both agents. The plugin never exposes tags or bankId to the model.",
+        "zh": "把 Hindsight 记忆服务接进 DeepSeek Harness，行为与 omp 一致：同一个记忆库、项目标签自动盖章、模型只看见 recall/retain/reflect/status/hygiene 五个语义化工具，看不到裸 MCP 工具，也碰不到 tags 与 bankId。另含记忆卫生层，让共享记忆库在两端同时保持去重整洁。"
       },
       "author": "meisijiya",
       "homepage": "https://github.com/meisijiya/dsh-hindsight-memory",
@@ -53,12 +53,12 @@
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishTimestamp": 1792644290,
+          "version": "0.2.0",
+          "publishTimestamp": 1792651146,
           "source": {
             "type": "git",
             "url": "https://github.com/meisijiya/dsh-hindsight-memory",
-            "commit": "17c25f19eaaf18667b9665ec920f1533132961f2"
+            "commit": "7eb09bb"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"
