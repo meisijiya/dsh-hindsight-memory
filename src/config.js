@@ -81,6 +81,14 @@ export const DEFAULTS = {
 	mentalModelProjectMaxTokens: 800,
 	/** 运维观测：列 operation 时取多少条。 */
 	operationsLimit: 20,
+	/** 是否启用知识页（knowledge pages）层。服务端一等能力，纯客户端封装。 */
+	knowledgePages: true,
+	/** 知识页检索默认返回条数。 */
+	pageSearchLimit: 5,
+	/** 知识页正文合成上限（服务端硬下限 256）。 */
+	pageMaxTokens: 2000,
+	/** initiative 页存放的文件夹名。 */
+	initiativeFolder: "Initiatives",
 };
 
 const BUDGETS = new Set(["low", "mid", "high"]);
@@ -200,5 +208,10 @@ export function normalizeConfig(raw = {}) {
 			8_000,
 		),
 		operationsLimit: int(raw.operationsLimit, DEFAULTS.operationsLimit, 1, 200),
+		knowledgePages: bool(raw.knowledgePages, DEFAULTS.knowledgePages),
+		pageSearchLimit: int(raw.pageSearchLimit, DEFAULTS.pageSearchLimit, 1, 50),
+		// 服务端硬性要求 max_tokens >= 256，否则 422 greater_than_equal。
+		pageMaxTokens: int(raw.pageMaxTokens, DEFAULTS.pageMaxTokens, 256, 8_000),
+		initiativeFolder: str(raw.initiativeFolder, DEFAULTS.initiativeFolder),
 	};
 }

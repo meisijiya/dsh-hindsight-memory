@@ -31,6 +31,21 @@ import {
 	planEnsure,
 } from "./mental-models.js";
 import {
+	DEFAULT_PAGE_TRIGGER,
+	INITIATIVE_TAG,
+	buildPageRequest,
+	filterPagesByScope,
+	findInitiativeMarkers,
+	flattenTree,
+	initiativeMarkerContent,
+	initiativeMarkerContext,
+	initiativeMarkerTier,
+	initiativeSourceQuery,
+	normalizeSearchResults,
+	normalizeTags,
+	pageTags,
+} from "./pages.js";
+import {
 	MEMORY_PROTOCOL,
 	buildPromptSection,
 	extractUserPrompt,
@@ -882,9 +897,271 @@ export async function apply(ctx, rawConfig = {}) {
 				}
 			},
 		},
+		{
+			name: "memory_pages",
+			description:
+				"知识页（knowledge pages）层：服务端合成的长文，比零散事实更像「章节」。action=list 列知识库树；action=search 检索页（服务端 BM25+向量融合，按本项目标签过滤）；action=read 读一页正文；action=create 建一页（服务端按 source_query 异步合成正文，产出自动盖本项目标签，因此 omp 也能看到）。",
+			parameters: {
+				type: "object",
+				properties: {
+					action: {
+						type: "string",
+						enum: ["list", "search", "read", "create"],
+						description: "要执行的动作，默认 list。",
+					},
+					id: {
+						type: "string",
+						description: "read 的目标页 id。",
+					},
+					query: {
+						type: "string",
+						description: "search 的检索词。",
+					},
+					title: {
+						type: "string",
+						description: "create 的页标题。",
+					},
+					sourceQuery: {
+						type: "string",
+						description: "create 时这页要回答什么问题（留空则按标题生成）。",
+					},
+					limit: {
+						type: "number",
+						description: "search 返回条数，默认取插件配置。",
+					},
+				},
+				required: [],
+			},
+			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
+			execute: async (args, exec) => {
+				try {
+					const channel = await requireChannel(exec);
+					const client = channel.client;
+					const action = String(args?.action ?? "list");
+					const scope = computeBankScope(config, channel.label);
+					const projectTags = scope.retainTags ?? [];
+
+					if (action === "list") {
+						const tree = await client.listKnowledgeTree({ signal: exec?.signal });
+						const flat = flattenTree(tree);
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							folders: flat.folders.map((folder) => ({
+								id: folder.id,
+								name: folder.name,
+								parentId: folder.parentId,
+							})),
+							pages: filterPagesByScope(flat.pages, projectTags),
+							totalPages: flat.pages.length,
+						});
+					}
+
+					if (action === "search") {
+						const query = String(args?.query ?? "").trim();
+						if (!query) return toolError("memory_pages search 需要 query");
+						const limit = Number.isFinite(Number(args?.limit))
+							? Math.min(50, Math.max(1, Math.trunc(Number(args.limit))))
+							: config.pageSearchLimit;
+						const raw = await client.searchKnowledgePages({
+							query,
+							limit,
+							tags: projectTags,
+							tagsMatch: "any",
+							signal: exec?.signal,
+						});
+						const results = filterPagesByScope(normalizeSearchResults(raw), projectTags);
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							query,
+							count: results.length,
+							results,
+						});
+					}
+
+					if (action === "read") {
+						const id = String(args?.id ?? "").trim();
+						if (!id) return toolError("memory_pages read 需要 id");
+						const page = await client.readKnowledgePage(id, { signal: exec?.signal });
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							id,
+							name: page?.name ?? null,
+							tags: normalizeTags(page?.tags),
+							markdown: page?.markdown ?? page?.body ?? null,
+							isStale: page?.is_stale === true,
+						});
+					}
+
+					if (action === "create") {
+						const title = String(args?.title ?? "").trim();
+						if (!title) return toolError("memory_pages create 需要 title");
+						const sourceQuery =
+							String(args?.sourceQuery ?? "").trim() || initiativeSourceQuery(title);
+						const request = buildPageRequest({
+							title,
+							sourceQuery,
+							tags: projectTags,
+							maxTokens: config.pageMaxTokens,
+							trigger: DEFAULT_PAGE_TRIGGER,
+						});
+						const created = await client.createKnowledgePage(request, { signal: exec?.signal });
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							pageId: created?.id ?? created?.page_id ?? null,
+							operationId: created?.operation_id ?? null,
+							request,
+						});
+					}
+
+					return toolError(`memory_pages 不支持的动作：${action}`);
+				} catch (error) {
+					log(`memory_pages failed: ${error?.message ?? error}`);
+					return toolError(`知识页操作失败：${error?.message ?? error}`);
+				}
+			},
+		},
+		{
+			name: "memory_initiative",
+			description:
+				"把「正在做的事」登记成受跟踪的一页（initiative）+ 一条标记事实，页与事实互链。action=capture 登记（title 必填；在 Initiatives 文件夹下建页，盖本项目标签，omp 同样可见）；action=list 列当前登记的 initiative。只登记真正在推进的工作，小修小补不要登记。",
+			parameters: {
+				type: "object",
+				properties: {
+					action: {
+						type: "string",
+						enum: ["capture", "list"],
+						description: "要执行的动作，默认 list。",
+					},
+					title: {
+						type: "string",
+						description: "capture 的计划标题。",
+					},
+					question: {
+						type: "string",
+						description: "capture 时这页要回答什么问题（留空用默认问句）。",
+					},
+				},
+				required: [],
+			},
+			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
+			execute: async (args, exec) => {
+				try {
+					const channel = await requireChannel(exec);
+					const client = channel.client;
+					const action = String(args?.action ?? "list");
+					const scope = computeBankScope(config, channel.label);
+					const projectTags = scope.retainTags ?? [];
+
+					if (action === "capture") {
+						const title = String(args?.title ?? "").trim();
+						if (!title) return toolError("memory_initiative capture 需要 title");
+						const folder = await client.ensureFolder(config.initiativeFolder, {
+							signal: exec?.signal,
+						});
+						const sourceQuery =
+							String(args?.question ?? "").trim() || initiativeSourceQuery(title);
+						const request = buildPageRequest({
+							title,
+							sourceQuery,
+							tags: pageTags(projectTags, [INITIATIVE_TAG]),
+							parentId: folder.id,
+							maxTokens: config.pageMaxTokens,
+							trigger: DEFAULT_PAGE_TRIGGER,
+						});
+						const created = await client.createKnowledgePage(request, {
+							signal: exec?.signal,
+						});
+						const pageId = String(created?.id ?? created?.page_id ?? "");
+						let marker = { ok: false, reason: "服务端未返回页 id，未写标记事实" };
+						if (pageId) {
+							try {
+								await client.retain({
+									content: initiativeMarkerContent(title, pageId),
+									tier: initiativeMarkerTier(),
+									context: initiativeMarkerContext(pageId),
+									sessionId: exec?.agent?.id,
+									signal: exec?.signal,
+								});
+								marker = { ok: true };
+							} catch (error) {
+								marker = { ok: false, reason: error?.message ?? String(error) };
+							}
+						}
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							folder,
+							pageId: pageId || null,
+							marker,
+							request,
+						});
+					}
+
+					if (action === "list") {
+						const tree = await client.listKnowledgeTree({ signal: exec?.signal });
+						const flat = flattenTree(tree);
+						const folder =
+							flat.folders.find((item) => item.name === config.initiativeFolder) ?? null;
+						const pages = filterPagesByScope(flat.pages, projectTags).filter((page) =>
+							folder?.id ? page.parentId === folder.id : false,
+						);
+						let markers = [];
+						try {
+							const facts = await client.listFacts({
+								limit: config.hygieneMaxFacts,
+								signal: exec?.signal,
+							});
+							const list = facts?.items ?? facts?.memories ?? facts ?? [];
+							markers = findInitiativeMarkers(list).map((fact) => ({
+								id: fact?.id ?? null,
+								text: fact?.text ?? "",
+								context: fact?.context ?? "",
+								tags: normalizeTags(fact?.tags),
+							}));
+						} catch (error) {
+							log(`initiative 标记读取失败（忽略）：${error?.message ?? error}`);
+						}
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							folder,
+							count: pages.length,
+							pages,
+							markers,
+						});
+					}
+
+					return toolError(`memory_initiative 不支持的动作：${action}`);
+				} catch (error) {
+					log(`memory_initiative failed: ${error?.message ?? error}`);
+					return toolError(`initiative 操作失败：${error?.message ?? error}`);
+				}
+			},
+		},
 	];
 
-	for (const tool of tools) {
+	// 知识页层可整体关掉（配置 knowledgePages=false）——工具的**数量**必须在 apply 时定，
+	// 不能中途增删：工具 schema 在请求头缓存前缀内，增删会让无 toolUpdate 能力的
+	// 适配器重开请求序列 ⇒ 缓存作废。
+	const activeTools = config.knowledgePages
+		? tools
+		: tools.filter(
+				(tool) => tool.name !== "memory_pages" && tool.name !== "memory_initiative",
+			);
+
+	for (const tool of activeTools) {
 		try {
 			const dispose = ctx.tools.register(tool);
 			ctx.effect(() => dispose);

@@ -75,6 +75,10 @@ export const FIELD_DOCS = {
 	mentalModelUserMaxTokens: "全局 mental model（user-preferences）的最大 token。",
 	mentalModelProjectMaxTokens: "项目级 mental model（conventions / decisions）的最大 token。",
 	operationsLimit: "运维观测：列 operation 时取多少条。",
+	knowledgePages: "是否启用知识页（knowledge pages）层。服务端一等能力，与 omp 无关但两端共用同一个 bank。",
+	pageSearchLimit: "知识页检索默认返回条数。",
+	pageMaxTokens: "知识页正文合成上限（服务端硬下限 256）。",
+	initiativeFolder: "initiative（正在做的事）页存放的文件夹名。",
 };
 
 /**
@@ -123,6 +127,10 @@ export const Config = z
 			mentalModelUserMaxTokens: z.number().default(600).description(FIELD_DOCS.mentalModelUserMaxTokens),
 			mentalModelProjectMaxTokens: z.number().default(800).description(FIELD_DOCS.mentalModelProjectMaxTokens),
 			operationsLimit: z.number().default(20).description(FIELD_DOCS.operationsLimit),
+			knowledgePages: z.boolean().default(true).description(FIELD_DOCS.knowledgePages),
+			pageSearchLimit: z.number().default(5).description(FIELD_DOCS.pageSearchLimit),
+			pageMaxTokens: z.number().default(2000).description(FIELD_DOCS.pageMaxTokens),
+			initiativeFolder: z.string().default("Initiatives").description(FIELD_DOCS.initiativeFolder),
 		})
 	: FALLBACK;
 

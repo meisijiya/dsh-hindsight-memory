@@ -296,9 +296,51 @@ window.__ModuleLoader__.load({
 				default: 20,
 				doc: "状态查询里列多少条 operation。失败任务不会自动重试，要盯着。",
 			},
+			{
+				group: "知识页",
+				key: "knowledgePages",
+				label: "启用知识页层",
+				type: "boolean",
+				default: true,
+				doc: "知识页（服务端合成的长文）与 initiative 登记。关掉就不注册这两个工具。",
+			},
+			{
+				group: "知识页",
+				key: "pageSearchLimit",
+				label: "检索条数",
+				type: "number",
+				default: 5,
+				doc: "memory_pages search 默认返回条数。",
+			},
+			{
+				group: "知识页",
+				key: "pageMaxTokens",
+				label: "页正文 token",
+				type: "number",
+				default: 2000,
+				doc: "知识页正文合成上限（服务端硬下限 256）。",
+			},
+			{
+				group: "知识页",
+				key: "initiativeFolder",
+				label: "Initiative 文件夹",
+				type: "text",
+				default: "Initiatives",
+				doc: "initiative（正在做的事）页存放的文件夹名。",
+			},
 		];
 
-		const GROUPS = ["连接", "行为", "隔离", "召回", "记忆卫生", "精神模型", "运维", "进阶"];
+		const GROUPS = [
+			"连接",
+			"行为",
+			"隔离",
+			"召回",
+			"记忆卫生",
+			"精神模型",
+			"知识页",
+			"运维",
+			"进阶",
+		];
 
 		const STYLE = {
 			wrap: {

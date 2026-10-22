@@ -26,7 +26,7 @@
             omp
 ```
 
-## 七个工具
+## 九个工具
 
 | 工具 | 作用 | 与 omp 的对应 |
 |------|------|----------------|
@@ -37,6 +37,10 @@
 | `memory_hygiene(action?, scope?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中；`scope` 可锁定某一层 | omp 无（见「记忆卫生」一节） |
 | `memory_mental_models(action?)` | 维护**精神模型**（跨会话的经验总结）：`ensure` 幂等建好三个模型（用户偏好 + 本项目约定/决策），`list`/`content`/`refresh`/`patch` | omp 启动时自动建同样的三个（见「精神模型」一节） |
 | `memory_operations(action?)` | 运维观测：列出抽取/刷新/合并任务，可 `retry` 失败任务 | omp 无（但 omp 也看不见失败任务） |
+| `memory_pages(action?, id?, query?, title?, sourceQuery?)` | **知识页**层（服务端合成的长文）：`list` 读知识库树、`search` 检索、`read` 读整页、`create` 建页（自动盖本项目标签） | omp 无（服务端同一套能力） |
+| `memory_initiative(action?, title?, question?)` | 把**正在做的事**登记成受跟踪的一页 + 一条标记事实（页与事实互链）：`capture` 登记、`list` 查看 | omp 无（服务端同一套能力） |
+
+> 知识页与 initiative 是 **Hindsight 服务端原生能力**（`/knowledge-base`），本插件只是把它包成与 omp 同语义的工具：产出盖 `project:<小写项目名>` 标签、不复用官方的 `source:`/`harness:` 标签、写入走 `async:true` + `metadata.session_id`。可用配置 `knowledgePages: false` 整体关掉这两个工具。
 
 **标签是插件的事，不是模型的事**：模型不传 `tags`，插件按 `basename(主 checkout 根).toLowerCase()` 盖章——与 omp 的 `projectLabel()` 逐字同规则。
 
@@ -271,10 +275,41 @@ Hindsight 的抽取/刷新/合并任务都进 `operations` 队列，**失败不�
 > 排查「召回为空」的第一步：`memory_status` 里的 `bank.factCount` 与 `bank.warnings`
 > ——**同名空 legacy bank 会伪装成零结果**，先核对 bank 名字再下结论。
 
+## 知识页与 initiative（服务端原生能力，本插件只做对齐）
+
+Hindsight 服务端自带 `/knowledge-base`（页 + 文件夹 + 全文检索）。本插件把它包成两个工具，
+**沿用与 omp 完全一致的写入纪律**：
+
+| 动作 | 落库形态 | 标签 | 写入方式 |
+|---|---|---|---|
+| `memory_pages action=create` | 一页（服务端按 `source_query` 异步合成正文） | `project:<小写项目名>` | `POST /knowledge-base/pages`，409 视作已存在 |
+| `memory_initiative action=capture` | 一页 + 一条标记事实（`context` 里带 `[[page:<id>]]` 互链） | 页：`project:<小写项目名>` + `knowledge:feature-work`；事实：`project:<小写项目名>` | 页同上；标记事实走 `async:true` + `metadata.session_id` |
+
+三条守则（与 omp 对齐的具体含义）：
+
+1. **产出必须盖本项目标签** —— 不盖标签的页 omp 的 `per-project-tagged` 召回看不见（它只认「无标签」或「带本项目标签」）。
+2. **不复用官方的 `source:`/`harness:` 标签** —— 那两个前缀是官方包的 provenance，混进来会让 DSH 侧按白名单过滤时把自家内容挡掉。
+3. **写操作异步 + 带 `metadata.session_id`** —— 页正文要等服务端合成（实测几十秒到几分钟），刚建完立刻 search 可能只拿到 `No content yet.`。
+
+实测（v0.5.0，bank `shared`）：
+
+```
+memory_pages list      → ok, folders=[], pages=[]
+memory_pages create   → ok, pageId=kp-…, operationId=41e2e487…（异步合成）
+memory_pages search   → ok, count=1, snippet="No content yet."（合成未完成）
+memory_initiative capture → ok, 自动建 Initiatives 文件夹 kf-…, 页 kp-…，标记事实 ok
+memory_initiative list → ok, count=1, markers=[]（标记事实异步落库，1~2 分钟后才有）
+```
+
+> ⚠️ **标记事实是异步的**：`capture` 立刻返回 `marker: {ok:true}` 只代表**入队成功**，
+> 事实真正落库要 1~2 分钟（服务端抽取 + 异步写）。刚 `capture` 就 `list` 看到 `markers: []` 是正常的，不是失败。
+
+`knowledgePages: false` 可整体关掉这一层（工具在 apply 时决定是否注册，见「缓存稳定性」）。
+
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 57 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 70 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
@@ -320,3 +355,4 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | 0.3.0 | 把插件行投影成宿主可编辑配置项：`LiveConfig`（全部字段 `.volatile()`）+ `unwrapConfig` + `loader/volatile-update` 热更新 |
 | 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
 | 0.4.0 | 对齐 omp 报告：新增**精神模型**层（`memory_mental_models`）+ **运维观测**（`memory_operations`）+ `memory_status` 的 bank 体检与队列体检；`memory_hygiene` 支持按层 `scope`；写入补本地时区 `timestamp` + `metadata.session_id`；自动留存对齐 omp 的 `retainEveryNTurns=3`（原来每轮都写，项目层被灌到 137 条） |
+| 0.5.0 | 搬入**知识页**层（`memory_pages`）与 **initiative** 登记（`memory_initiative`）：服务端 `/knowledge-base` 原生能力，产出盖项目标签、不复用 `source:`/`harness:`、写入 async + `metadata.session_id`；新增 `src/pages.js` + 13 条单测；配置 `knowledgePages` 可整体关掉 |

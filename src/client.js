@@ -23,6 +23,7 @@ import {
 	retainTags,
 	truncateQuery,
 } from "./parity.js";
+import { flattenTree } from "./pages.js";
 
 /** bank id 里可能有中文 ⇒ 路径段必须 percent-encode。 */
 function encodeSegment(value) {
@@ -446,6 +447,69 @@ export class HindsightMemoryClient {
 			`/v1/default/banks/${encodeSegment(this.bankId)}/stats`,
 			{ signal, timeoutMs: this.config.recallTimeoutMs },
 		);
+	}
+
+	// ─────────────────── 知识页（knowledge pages）层 ───────────────────
+	// 🔴 只走 REST：服务端把 MCP 工具面收窄到 7 个安全工具，知识页接口不在其中。
+	//    这些接口是**服务端的一等能力**，不需要官方 coding-agents 包也能用。
+
+	/** 读知识库树（roots + 子树）。 */
+	async listKnowledgeTree({ signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/tree`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/**
+	 * 检索知识页（服务端 BM25 + 向量 RRF）。
+	 * tags / tags_match 与 recall 同一套白名单语义：无标签 = 全局层，任何项目可见。
+	 */
+	async searchKnowledgePages({ query, limit = 5, tags = [], tagsMatch = "any", signal } = {}) {
+		const params = new URLSearchParams({
+			q: String(query ?? ""),
+			limit: String(limit),
+		});
+		const tagList = Array.isArray(tags) ? tags.filter(Boolean) : [];
+		if (tagList.length > 0) {
+			params.set("tags", tagList.join(","));
+			params.set("tags_match", tagsMatch);
+		}
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/search?${params.toString()}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 读一页正文（KnowledgePageResponse：id/name/type/markdown/tags…）。 */
+	async readKnowledgePage(id, { signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/pages/${encodeSegment(id)}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 建一页（服务端按 source_query 合成正文，异步）。 */
+	async createKnowledgePage(request, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/pages`,
+			request,
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 确保存在一个同名文件夹，返回 {id, created}。 */
+	async ensureFolder(name, { signal } = {}) {
+		const tree = await this.listKnowledgeTree({ signal });
+		const flat = flattenTree(tree);
+		const hit = flat.folders.find((folder) => folder.name === name);
+		if (hit?.id) return { id: hit.id, created: false };
+		const created = await this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/folders`,
+			{ name },
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+		return { id: created?.id ?? null, created: true };
 	}
 
 	// ────────────────────────── HTTP 工具 ──────────────────────────

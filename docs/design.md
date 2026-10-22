@@ -825,3 +825,75 @@ DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只�
 服务端再抽取成多条事实）。已按 omp 的 `retainEveryNTurns=3` 限流；
 且 bank 级 `max_observations_per_scope=30` 只兜 observation，**world 原始事实不受服务端上限约束**
 ⇒ 长期仍需 `memory_hygiene` 的近重复清理兜底。
+
+---
+
+## 26. v0.5.0：搬入知识页与 initiative（服务端原生能力）
+
+### 26.1 输入
+
+用户在对比官方 `hindsight-integrations/coding-agents` 后问「知识页 / codebase survey / initiative 这三个干嘛的」，
+并批准「可以」——先搬**知识页 + initiative**，**codebase survey 留作默认关闭的开关**。
+
+### 26.2 三个能力是什么
+
+| 能力 | 归属 | 本质 |
+|---|---|---|
+| 知识页 knowledge pages | **服务端** | `/knowledge-base` 树里的 page 节点；`source_query` 写「这页回答什么问题」，服务端按 trigger 合成正文；检索是服务端 BM25 + 向量 RRF |
+| codebase survey | **客户端编排** | 官方用 claude/codex/opencode 外部 CLI 跑 `SURVEY_PROMPT`，把仓库结构固化成 4 篇文档，每 N 个 commit 重刷 |
+| initiative | **服务端页 + 一条记忆标记** | 建文件夹 → 建页（tag `knowledge:feature-work`）→ retain 一条 `initiative-marker-<slug>` 事实，`context` 里 `[[page:<id>]]` 互链 |
+
+### 26.3 为什么只搬前两个、survey 留开关
+
+- **服务端已支持**：`GET /knowledge-base/tree`、`GET /knowledge-base/search`、`POST /knowledge-base/pages`、
+  `POST /knowledge-base/folders` 本机实测全部可用 ⇒ 零服务端成本，不用引官方包。
+- **survey 不搬**：官方实现要调外部 CLI（花 token、本机也没装）、把仓库结构固化成记忆
+  （与 omp「只记人的决策」不同源）、而且**官方写的文档不带本项目小写标签** ⇒ omp 的
+  `per-project-tagged` 召回看不见，DSH 侧又是整库读 ⇒ 只会变成「谁也看不见的垃圾堆」。
+  本插件的对应能力要落地，必须走「DSH subagent + 盖 `project:<小写名>` 标签 + 默认关闭」。
+
+### 26.4 搬入时守的三条线（与 omp 对齐的具体含义）
+
+1. **产出必须盖 `project:<小写 basename>` 标签** —— omp 的召回白名单只认「无标签」或「带本项目标签」，
+   不盖标签的页 omp 永远看不见。
+2. **不复用官方的 `source:` / `harness:` 标签** —— 那是官方包的 provenance 前缀；
+   混进本项目的标签集会让 DSH 侧按白名单过滤时把自家内容挡掉（`sanitizeTags` 已在写入侧丢弃这两个前缀）。
+3. **写操作 `async:true` + `metadata.session_id`** —— 与 omp 的 retain 体例一致，且抽取要几十秒。
+
+### 26.5 实现落点
+
+- `src/pages.js`（纯函数，可单测）：`slugify` / `initiativeSourceQuery` / `pageTags` / `normalizeTags` /
+  `buildPageRequest`（max_tokens 夹到服务端下限 256）/ `flattenTree` / `filterPagesByScope`
+  （无标签=全局层可见，与 recall 白名单同语义）/ `normalizeSearchResults` /
+  `initiativeMarkerContent` / `initiativeMarkerContext` / `findInitiativeMarkers`。
+- `src/client.js`：`listKnowledgeTree` / `searchKnowledgePages` / `readKnowledgePage` /
+  `createKnowledgePage` / `ensureFolder`（**全部走 REST** —— MCP 工具面已被服务端收窄到 7 个，不含知识页接口）。
+- `src/index.js`：新增 `memory_pages`（list/search/read/create）与 `memory_initiative`（capture/list）两个工具；
+  注册时用 `config.knowledgePages` 过滤 —— **工具数量必须在 apply 时定**，因为工具 schema 在请求头缓存前缀内，
+  中途增删会让没有 `toolUpdate` 能力的适配器重开请求序列、缓存作废。
+- `src/config.js`：`knowledgePages`（默认 true）/ `pageSearchLimit`（5）/ `pageMaxTokens`（2000，下限 256）/
+  `initiativeFolder`（"Initiatives"）。
+
+### 26.6 活体验收（旁路 headless，不动用户实例）
+
+`dsh headless --patch <overlay>.yml "…"` 五连调用，全部 `ok:true`：
+
+| 调用 | 返回 |
+|---|---|
+| `memory_pages list` | folders=[]、pages=[]、totalPages=0 |
+| `memory_pages create` | pageId=`kp-77c6aeb8…`、operationId=`41e2e487…`（异步合成） |
+| `memory_pages search` | count=1、snippet="No content yet."（正文尚未合成完） |
+| `memory_initiative capture` | 自动建文件夹 `kf-109a5fb9…`、页 `kp-c2aa8496…`、marker `{ok:true}` |
+| `memory_initiative list` | count=1、isStale=false、**markers=[]** |
+
+**探针清理**：2 个页 + 1 个文件夹已 `DELETE /knowledge-base/nodes/{id}`（均 200 `{"status":"deleted"}`），
+标记事实 `c58a15f7…` 已 `PATCH {"state":"invalidated"}`；复查 tree roots=0、残留探针事实=0。
+
+### 26.7 两条实测教训（写进设计文档免得下次再踩）
+
+1. **标记事实是异步的**：`capture` 返回 `marker:{ok:true}` 只代表入队成功，事实真正落库要 1~2 分钟；
+   紧接着 `list` 看到 `markers:[]` 是正常时序，**不是失败**。排查要用 `GET /memories/list?limit=1000`
+   再按 `context` 过滤——`limit=200` 会漏掉（当时库里 235 条事实）。
+2. **项目标签取自工作目录**：验收时 headless 是在 `C:\Users\22923` 下跑的（不是 git 仓库），
+   于是标签退化成 `project:22923` —— 这是 `label.js` 的**正确降级**（basename(cwd).toLowerCase()），
+   但意味着**在非项目目录里跑插件会污染项目层标签**。验证必须在真实项目目录里跑。
