@@ -55,8 +55,27 @@ const mcpProject = await mcpClient.retain({
 });
 cleanup.push(mcpProject);
 
-console.log("等待服务端异步抽取落库（25s）…");
-await new Promise((r) => setTimeout(r, 25_000));
+// 服务端抽取是异步的，而且**耗时随服务端负载浮动**（本机曾出现 25s 不够、
+// 1~2 分钟才落库的情况）。改成轮询等 marker 出现，最多等 180s，避免自检假阴性。
+const WAIT_BUDGET_MS = Number(process.env.HS_VERIFY_WAIT_MS ?? 180_000);
+console.log(`等待服务端异步抽取落库（最多 ${Math.round(WAIT_BUDGET_MS / 1000)}s，轮询）…`);
+const waitForMarker = async () => {
+	const deadline = Date.now() + WAIT_BUDGET_MS;
+	let last = { facts: [] };
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, 10_000));
+		last = await mcpClient.recall({ query: marker, scope: SCOPE.PROJECT, budget: "low" });
+		const hit = last.facts.some((f) => (f.text ?? "").includes(marker));
+		if (hit) return { ok: true, waited: Math.round((WAIT_BUDGET_MS - (deadline - Date.now())) / 1000) };
+	}
+	return { ok: false, waited: Math.round(WAIT_BUDGET_MS / 1000), last };
+};
+const markerWait = await waitForMarker();
+console.log(
+	markerWait.ok
+		? `探针事实已落库（约 ${markerWait.waited}s）。`
+		: `⚠️ ${markerWait.waited}s 内探针事实仍未落库——服务端抽取偏慢或队列堵塞，下面两条检查会因此报 FAIL。`,
+);
 
 const projectScope = await mcpClient.recall({ query: marker, scope: SCOPE.PROJECT, budget: "low" });
 const projectOnly = await mcpClient.recall({ query: marker, scope: SCOPE.PROJECT_ONLY, budget: "low" });
