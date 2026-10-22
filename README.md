@@ -26,15 +26,17 @@
             omp
 ```
 
-## 五个工具
+## 七个工具
 
 | 工具 | 作用 | 与 omp 的对应 |
 |------|------|----------------|
 | `memory_recall(query, scope?)` | 召回长期记忆。`scope=project`（默认）= 本项目 + 全局；`project_only` = 只本项目；`global` = 只全局 | omp 的 `recall` |
 | `memory_retain(content, tier?)` | 写入耐久事实。`tier=project`（默认）只有本项目可见；`tier=global` 所有项目可见 | omp 的 `retain` |
 | `memory_reflect(query, scope?)` | 让记忆服务综合回答（不是返回原始条目） | omp 的 `reflect` |
-| `memory_status()` | 连通性、当前记忆库、项目标签、各层条数 | omp 无（诊断用） |
-| `memory_hygiene(action?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中 | omp 无（见「记忆卫生」一节） |
+| `memory_status()` | 连通性、当前记忆库（含 bank 体检告警）、项目标签、各层条数与类型分布、任务队列健康度 | omp 无（诊断用） |
+| `memory_hygiene(action?, scope?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中；`scope` 可锁定某一层 | omp 无（见「记忆卫生」一节） |
+| `memory_mental_models(action?)` | 维护**精神模型**（跨会话的经验总结）：`ensure` 幂等建好三个模型（用户偏好 + 本项目约定/决策），`list`/`content`/`refresh`/`patch` | omp 启动时自动建同样的三个（见「精神模型」一节） |
+| `memory_operations(action?)` | 运维观测：列出抽取/刷新/合并任务，可 `retry` 失败任务 | omp 无（但 omp 也看不见失败任务） |
 
 **标签是插件的事，不是模型的事**：模型不传 `tags`，插件按 `basename(主 checkout 根).toLowerCase()` 盖章——与 omp 的 `projectLabel()` 逐字同规则。
 
@@ -228,10 +230,51 @@ node scripts/hygiene.mjs --consolidate
 
 > 阈值怎么选：`0.9` 只抓逐字重复；`0.8` 能抓「同一件事换个说法」（本机这轮的真实情况）；`0.7` 起要人工看一眼再下手。
 
+## 精神模型（mental models）：跨会话的经验总结
+
+omp 在启动时会幂等建三个 mental model（本插件对齐了同样的三件套）：
+
+| 模型 | 标签 | 作用 |
+|---|---|---|
+| `dsh-user-preferences` | **无标签**（全局层，所有项目可见） | 用户的长期偏好 |
+| `dsh-project-conventions-<完整项目名>` | `project:<项目名小写>` | 本项目的约定 |
+| `dsh-project-decisions-<完整项目名>` | `project:<项目名小写>` | 本项目的决策 |
+
+**为什么 id 要带前缀 + 完整项目名**：omp 的 id 规则是「只保留 ASCII 字母数字」，
+所以纯中文项目名在 omp 侧会全部退化成 `project-conventions-project`——多个中文项目会抢同一个模型，
+实测其中一个还带着别的项目的标签。DSH 侧改用 `dsh-` 前缀 + **完整中文项目名**，
+服务端不强制 id 只能 ASCII（实测中文 id 创建成功），这样 DSH 与 omp 的模型**互不覆盖**。
+
+> ⚠️ 服务端 `POST /mental-models` 是**仅创建**：重复 id 返 `409` 且**不改写已有 tags**。
+> 所以插件的做法是「缺就建、标签不对就 PATCH、对的就原样保留」——`planEnsure()` 干这件事。
+
+```bash
+# 插件工具：memory_mental_models(action=ensure|list|content|refresh|patch)
+```
+
+**实测（2026-10-22，bank `shared`）**：`ensure` 返回 `created:0 patched:0 kept:3`，
+三个模型齐全，`dsh-user-preferences` 标签为空（全局层）、两个项目模型带 `project:随便问问`。
+
+## 运维观测：失败任务不会自动重试
+
+Hindsight 的抽取/刷新/合并任务都进 `operations` 队列，**失败不会自动重试**
+（`retry_count` 不涨、`next_retry_at` 为空）。所以必须有观测手段，否则「记忆写不进去」会静默。
+
+```bash
+# 插件工具：memory_operations(action=list|retry|delete)
+```
+
+`memory_status` 里已经带了队列体检：按状态/任务类型统计 + 最近任务的 `error` 与 `retryCount`。
+实测：`total 248 / processing 8 / completed 11 / failed 1`，那条 failed 是探针 mental model 被删后
+遗留的 `refresh_mental_model`（`ValueError: Mental model probe-mm-测试 not found`）。
+
+> 排查「召回为空」的第一步：`memory_status` 里的 `bank.factCount` 与 `bank.warnings`
+> ——**同名空 legacy bank 会伪装成零结果**，先核对 bank 名字再下结论。
+
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 41 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 57 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
@@ -243,9 +286,13 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 
 - 召回注入载体是 DSH 的**用户消息**，omp 是 `<memories>` 背景块——形状已对齐，载体不同。
 - 自动召回结果未持久化进 session 文件，resume 会重查一次（omp 会重放缓存块）。
-- 自动留存是「本回合文本」简化版，未实现 omp 的 full-session 整段重发 + `document_id=sessionId`。
+- 自动留存是「本回合文本」简化版，未实现 omp 的 full-session 整段重发 + `document_id=sessionId`；
+  节奏已对齐（每 `retainEveryNTurns`=3 回合一次）。
 - DSH 侧**纯全局层读取**需要「整库读 + 客户端过滤」（服务端没有「只取无标签」的表达）。
 - omp 自己**产不出全局层**（它的 retain 恒带 `project:` 标签）；全局层目前只由 DSH 侧不传标签写入。
+- 精神模型：DSH 与 omp 各建各的（id 前缀不同、互不覆盖）；**DSH 侧不会去改 omp 建的模型**。
+- mental model 刷新要能跑完，得同时放宽服务端三个超时（`REFLECT_WALL_TIMEOUT` / `LLM_TIMEOUT` / worker 存活），
+  客户端改不了；本机已把服务端超时放宽（1800/600/600）。
 
 ## 排障（踩过的坑，别重复踩）
 
@@ -272,3 +319,4 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | 0.2.0 | 记忆卫生层：`memory_hygiene` 工具 + `src/hygiene.js` + bank 级 consolidation 配置 + 终端面板卫生板块 |
 | 0.3.0 | 把插件行投影成宿主可编辑配置项：`LiveConfig`（全部字段 `.volatile()`）+ `unwrapConfig` + `loader/volatile-update` 热更新 |
 | 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
+| 0.4.0 | 对齐 omp 报告：新增**精神模型**层（`memory_mental_models`）+ **运维观测**（`memory_operations`）+ `memory_status` 的 bank 体检与队列体检；`memory_hygiene` 支持按层 `scope`；写入补本地时区 `timestamp` + `metadata.session_id`；自动留存对齐 omp 的 `retainEveryNTurns=3`（原来每轮都写，项目层被灌到 137 条） |

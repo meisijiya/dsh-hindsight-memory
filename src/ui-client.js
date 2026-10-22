@@ -239,9 +239,66 @@ window.__ModuleLoader__.load({
 				default: 30,
 				doc: "bank 级 max_observations_per_scope（无标签 scope 只能走 bank 默认）。",
 			},
+			{
+				group: "记忆卫生",
+				key: "hygieneScope",
+				label: "默认作用的层",
+				type: "select",
+				default: "all",
+				options: ["all", "project", "global", "other"],
+				doc: "project=本项目层，global=跨项目全局层（无 tag），other=其它项目层，all=整库。",
+			},
+			{
+				group: "精神模型",
+				key: "mentalModels",
+				label: "启用精神模型层",
+				type: "boolean",
+				default: true,
+				doc: "服务端从事实层归纳出的长期画像。omp 侧有，DSH 侧补齐才算行为对齐。",
+			},
+			{
+				group: "精神模型",
+				key: "injectMentalModels",
+				label: "会话首轮注入正文",
+				type: "boolean",
+				default: true,
+				doc: "与 omp 对齐：首轮把精神模型正文作为背景知识注入（走用户消息，不进缓存前缀）。",
+			},
+			{
+				group: "精神模型",
+				key: "mentalModelPrefix",
+				label: "模型 id 前缀",
+				type: "text",
+				default: "dsh",
+				doc: "与 omp 的 id 空间分开，避免 409 冲突与 tags 抢写。",
+			},
+			{
+				group: "精神模型",
+				key: "mentalModelUserMaxTokens",
+				label: "用户偏好模型 token",
+				type: "number",
+				default: 600,
+				doc: "全局精神模型（user-preferences）的最大 token。",
+			},
+			{
+				group: "精神模型",
+				key: "mentalModelProjectMaxTokens",
+				label: "项目模型 token",
+				type: "number",
+				default: 800,
+				doc: "项目级精神模型（conventions / decisions）的最大 token。",
+			},
+			{
+				group: "运维",
+				key: "operationsLimit",
+				label: "任务队列条数",
+				type: "number",
+				default: 20,
+				doc: "状态查询里列多少条 operation。失败任务不会自动重试，要盯着。",
+			},
 		];
 
-		const GROUPS = ["连接", "行为", "隔离", "召回", "记忆卫生", "进阶"];
+		const GROUPS = ["连接", "行为", "隔离", "召回", "记忆卫生", "精神模型", "运维", "进阶"];
 
 		const STYLE = {
 			wrap: {

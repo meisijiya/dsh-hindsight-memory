@@ -767,3 +767,60 @@ hindsight-memory (dsh-hindsight-memory): failed to import:
 `netstat` 证据：PID 41108（`dsh lib/bin.js web --no-open`）同时监听 `127.0.0.1:3080` 与 `0.0.0.0:3081`，
 它就是承载当前会话的 DSH Web。**任何"重启/杀进程"动作都可能把会话与公网隧道一起带走** ⇒
 本插件的所有验证改走旁路（headless overlay / profile 内 import / 一次性探针），不动用户实例。
+
+## 25. v0.4.0：对齐 omp 接入报告（2026-10-22）
+
+### 25.1 输入
+
+用户提供的 `omp-hindsight-report.md`（431 行，omp 侧实测）是本轮的对齐基线。
+从中提炼出 9 条差距（G1–G9），本轮全部收敛。
+
+### 25.2 差距 → 落点对照
+
+| 差距 | 内容 | 本轮落点 | 状态 |
+|---|---|---|---|
+| G1 | **精神模型层完全缺失**（omp 启动建 user-preferences / project-conventions / project-decisions） | 新增 `src/mental-models.js` + `memory_mental_models` 工具 + 会话内自动 ensure/注入 | ✅ |
+| G2 | 分层维护工具不完整（hygiene 无 scope、status 只有粗计数） | `memory_hygiene` 增加 `scope`（all/project/global/other）与 `action=layers`；`memory_status` 增加 `layerDetail`（条数+类型分布+最近更新） | ✅ |
+| G3 | 运维观测缺失（失败任务不自动重试却看不见） | 新增 `memory_operations`（list/retry/delete）；`memory_status.operations` 给队列体检 | ✅ |
+| G4 | mission 归属：DSH 不得改写共享 bank 的 mission | 代码层锁死：不实现 `PUT /banks`，并加静态回归测试 | ✅ |
+| G5 | mental model id 唯一性（中文名 + 前缀） | id = `dsh-<片段>-<完整项目名>`，不 ASCII 过滤；与 omp id 空间分离 | ✅ |
+| G6 | bank fact_count 核对 + 空 bank 警告 | `client.bankOverview()` + `memory_status.bank.warnings` | ✅ |
+| G7 | recall 只发 6 字段 | 已对齐，**新增回归测试锁死**（不发 prefer_observations / filter） | ✅ |
+| G8 | retain 缺 `timestamp` + `metadata.session_id` | `localTimestamp()`（本地时区带偏移）+ `metadata.session_id`（REST 与 MCP 双路径） | ✅ |
+| G9 | 不实现 memory_edit 类原地编辑 | 保持不实现（纠错靠新写入 + observation 滚动淘汰） | ✅ |
+| G10（本轮新增） | 自动留存节奏与 omp 不一致（DSH 每轮写、omp 每 3 轮） | `retainEveryNTurns` 默认 3（复用已有配置键） | ✅ |
+
+### 25.3 三个必须记住的服务端事实
+
+1. **mental model 的 `max_tokens` 必须 ≥ 256**，否则 422 `greater_than_equal`。
+   配置下限已从 100 提到 256（`normalizeConfig` 强制）。
+2. **`POST /mental-models` 是仅创建**：重复 id 返 409，**不改写已有 tags**；改标签只能 PATCH。
+   插件的 `planEnsure()` 因此是三分支：缺→create、标签不符→patch、对的→keep。
+3. **list 响应的键是 `items`**（不是 `models`/`mental_models`）；`GET /operations` 的键是 `operations`。
+
+### 25.4 中文项目名在 omp 侧的坑（对照实验）
+
+omp 的 mental model id 规则是「只保留 ASCII 字母数字」，
+所以纯中文项目名在 omp 侧全部退化成 `project-conventions-project`——本机实测该模型带着
+`project:随便问问` 的标签，即**多个中文项目会互相抢模型**。
+DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只能 ASCII，实测中文 id 创建 200），
+于是 DSH 与 omp 的模型互不覆盖。
+
+### 25.5 活体验收（旁路 headless，不动用户实例）
+
+`dsh headless --patch <overlay>.yml "…"`（overlay 里用 file:// 指向本地源码）实测：
+
+- `memory_mental_models action=ensure` → `created:0 patched:0 kept:3`，
+  `dsh-user-preferences`（tags=[]）、`dsh-project-conventions-随便问问`、`dsh-project-decisions-随便问问`（tags=["project:随便问问"]）。
+- `memory_hygiene action=layers` → 全局层 23（world 13 / observation 10）、
+  项目层 137（world 64 / observation 40 / experience 33）、其它项目层 19、合计 179。
+- `memory_status` → `bank.factCount=179, totalBanks=1, warnings=[]`；
+  `operations` → total 248 / processing 8 / completed 11 / failed 1（含 error 与 retryCount）。
+- 单元测试 57/57；`node scripts/verify-live.mjs` 8/8（含跨项目硬隔离负例 count=0）。
+
+### 25.6 由这轮数据引出的判断
+
+项目层 137 条 vs 全局层 23 条——**项目层被自动留存灌满**（每轮对话都写一条原始事实，
+服务端再抽取成多条事实）。已按 omp 的 `retainEveryNTurns=3` 限流；
+且 bank 级 `max_observations_per_scope=30` 只兜 observation，**world 原始事实不受服务端上限约束**
+⇒ 长期仍需 `memory_hygiene` 的近重复清理兜底。

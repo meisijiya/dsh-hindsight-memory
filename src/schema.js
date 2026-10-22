@@ -55,7 +55,7 @@ export const FIELD_DOCS = {
 	recallMaxQueryChars: "召回 query 截断长度。omp 的 recallMaxQueryChars 默认 800（保留尾部）。",
 	autoRecall: "是否在会话首轮自动召回一次（结果落用户消息，不进系统提示词前缀）。",
 	autoRetain: "是否在回合结束自动留存会话结论。",
-	retainEveryNTurns: "自动留存的回合间隔（对齐 omp 的 retainEveryNTurns 默认 3）。",
+	retainEveryNTurns: "自动留存的回合间隔（对齐 omp 的 retainEveryNTurns 默认 3；不限流会把项目层灌满对话噪声）。",
 	sectionOrder: "注入段顺序（字面数字）。落在 FILE_REFERENCE(900) 与 TOOL_BASH(1000) 之间。",
 	projectLabelOverride: "项目标签覆盖。留空 ⇒ 按 git 主 checkout 根目录 basename 小写推导（与 omp 同规则）。",
 	transport: "传输层：rest | mcp。默认 mcp，走服务端官方 per-bank MCP 端点。",
@@ -68,6 +68,13 @@ export const FIELD_DOCS = {
 	hygieneProjectMaxObservations: "项目层 observation 条数上限。",
 	hygieneGlobalMission: "全局层 observation 的保留口径（bank 级 observations_mission）。",
 	hygieneGlobalMaxObservations: "全局层 observation 条数上限。",
+	hygieneScope: "记忆卫生默认作用的层：all | project | global | other。",
+	mentalModels: "是否维护 mental model（精神模型）层。omp 侧有，DSH 侧补齐才算行为对齐。",
+	injectMentalModels: "是否把 mental model 正文注入会话（与 omp 的注入行为对齐）。",
+	mentalModelPrefix: "mental model id 前缀。与 omp 的 id 空间分开，避免 409 与 tags 抢写。",
+	mentalModelUserMaxTokens: "全局 mental model（user-preferences）的最大 token。",
+	mentalModelProjectMaxTokens: "项目级 mental model（conventions / decisions）的最大 token。",
+	operationsLimit: "运维观测：列 operation 时取多少条。",
 };
 
 /**
@@ -109,6 +116,13 @@ export const Config = z
 				.default("只保留跨项目长期有效的约定、环境事实与用户偏好；不保留一次性进度、临时状态与重复表述。")
 				.description(FIELD_DOCS.hygieneGlobalMission),
 			hygieneGlobalMaxObservations: z.number().default(30).description(FIELD_DOCS.hygieneGlobalMaxObservations),
+			hygieneScope: z.string().default("all").description(FIELD_DOCS.hygieneScope),
+			mentalModels: z.boolean().default(true).description(FIELD_DOCS.mentalModels),
+			injectMentalModels: z.boolean().default(true).description(FIELD_DOCS.injectMentalModels),
+			mentalModelPrefix: z.string().default("dsh").description(FIELD_DOCS.mentalModelPrefix),
+			mentalModelUserMaxTokens: z.number().default(600).description(FIELD_DOCS.mentalModelUserMaxTokens),
+			mentalModelProjectMaxTokens: z.number().default(800).description(FIELD_DOCS.mentalModelProjectMaxTokens),
+			operationsLimit: z.number().default(20).description(FIELD_DOCS.operationsLimit),
 		})
 	: FALLBACK;
 

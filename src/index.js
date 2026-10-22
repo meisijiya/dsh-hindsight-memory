@@ -23,12 +23,19 @@ import { resolveProjectLabel } from "./label.js";
 import { HindsightMemoryClient } from "./client.js";
 import { SCOPE, TIER, computeBankScope } from "./parity.js";
 import { normalizeScope, sanitizeMemoryText, sanitizeTags } from "./sanitize.js";
-import { findDuplicateGroups, planPrune, summarizeGroups } from "./hygiene.js";
+import { findDuplicateGroups, planPrune, summarizeGroups, filterByScope, describeLayers } from "./hygiene.js";
+import {
+	mentalModelIds,
+	mentalModelSpecs,
+	normalizeMentalModels,
+	planEnsure,
+} from "./mental-models.js";
 import {
 	MEMORY_PROTOCOL,
 	buildPromptSection,
 	extractUserPrompt,
 	renderRecallMessage,
+	renderMentalModelMessage,
 } from "./prompt.js";
 
 export const name = "hindsight-memory";
@@ -79,6 +86,20 @@ function unwrapConfig(value) {
 
 const JSON_OBJECT_OUTPUT = { type: "object", additionalProperties: true };
 
+/** 记忆卫生可作用的层。 */
+const HYGIENE_SCOPES = new Set(["all", "project", "global", "other"]);
+
+/**
+ * 归一化记忆卫生的作用层。
+ * @param {unknown} value 原始值。
+ * @param {string} fallback 配置里的默认值。
+ * @returns {"all"|"project"|"global"|"other"}
+ */
+function normalizeHygieneScope(value, fallback = "all") {
+	if (typeof value === "string" && HYGIENE_SCOPES.has(value)) return value;
+	return HYGIENE_SCOPES.has(fallback) ? fallback : "all";
+}
+
 /** 工具错误统一形状。 */
 function toolError(message) {
 	return {
@@ -119,6 +140,59 @@ async function layerCounts(channel, signal) {
 		return countLayers(active, channel.label);
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * 分层体检（每层条数 + 事实类型分布 + 最近更新时间）。
+ * 失败不抛——状态查询不该因为多一次调用就失败。
+ * @param {object} channel 记忆通道。
+ * @param {AbortSignal} [signal]
+ */
+async function layerDetails(channel, signal) {
+	try {
+		const raw = await channel.client.listFacts({ limit: 500, signal });
+		const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
+		const active = facts.filter((f) => (f?.state ?? "valid") === "valid");
+		return describeLayers(active, channel.label);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * 运维观测：服务端任务队列摘要。
+ * 报告 §6.10：**失败任务不会自动重试**，不观测就会出现「写进去了但查不到」的静默故障。
+ * @param {object} channel 记忆通道。
+ * @param {number} limit 取多少条。
+ * @param {AbortSignal} [signal]
+ */
+async function operationSummary(channel, limit, signal) {
+	try {
+		const raw = await channel.client.listOperations({ limit, signal });
+		const operations = Array.isArray(raw)
+			? raw
+			: (raw?.operations ?? raw?.items ?? []);
+		const byStatus = {};
+		const byTask = {};
+		const recent = [];
+		for (const op of operations) {
+			const status = String(op?.status ?? "unknown");
+			byStatus[status] = (byStatus[status] ?? 0) + 1;
+			const task = String(op?.task_type ?? op?.operation_type ?? "unknown");
+			byTask[task] = (byTask[task] ?? 0) + 1;
+			recent.push({
+				id: op?.operation_id ?? op?.id,
+				status,
+				taskType: task,
+				error: op?.error_message ?? null,
+				retryCount: op?.retry_count ?? null,
+				createdAt: op?.created_at ?? null,
+			});
+		}
+		return { total: raw?.total ?? operations.length, byStatus, byTask, recent };
+	} catch (error) {
+		return { error: error?.message ?? String(error) };
 	}
 }
 
@@ -189,7 +263,7 @@ export async function apply(ctx, rawConfig = {}) {
 		if (!dir) dir = process.cwd();
 		const label = await resolveProjectLabel(dir, config.projectLabelOverride);
 		const client = new HindsightMemoryClient({ config, label, log });
-		const channel = { dir, label, client, primed: false };
+		const channel = { dir, label, client, primed: false, turnCount: 0 };
 		channels.set(agent.id, channel);
 		return channel;
 	}
@@ -229,6 +303,64 @@ export async function apply(ctx, rawConfig = {}) {
 		if (!channel) throw new Error("无法解析当前会话的工作目录");
 		return channel;
 	};
+
+	/**
+	 * 取 mental model（精神模型）正文，渲染成注入块。
+	 *
+	 * 与 omp 对齐：omp 启动时保证 3 个 mental model 存在并把正文注入会话提示。
+	 * DSH 侧同样在**会话首轮**做一次（ensure + 取正文），
+	 * 之后不再重取 —— 正文变了也不重取，避免提示词前缀在会话中途变化。
+	 *
+	 * @param {object} channel 记忆通道。
+	 * @param {AbortSignal} [signal]
+	 * @returns {Promise<string>} 注入文本（空串 = 没有可注入的模型）。
+	 */
+	async function mentalModelBlock(channel, signal) {
+		if (!channel.mentalModelsEnsured) {
+			channel.mentalModelsEnsured = true;
+			try {
+				const scope = computeBankScope(config, channel.label);
+				const specs = mentalModelSpecs(config, channel.label, scope.retainTags ?? []);
+				const raw = await channel.client.listMentalModels({
+					detail: "metadata",
+					limit: 200,
+					signal,
+				});
+				const existing = raw?.models ?? raw?.items ?? raw ?? [];
+				const plan = planEnsure(existing, specs);
+				for (const spec of plan.create) {
+					try {
+						await channel.client.createMentalModel(spec, { signal });
+					} catch (error) {
+						log(`mental model 创建失败（忽略）：${spec.id} ${error?.message ?? error}`);
+					}
+				}
+				for (const item of plan.patch) {
+					try {
+						await channel.client.patchMentalModel(item.id, { tags: item.tags }, { signal });
+					} catch (error) {
+						log(`mental model 标签修正失败（忽略）：${item.id} ${error?.message ?? error}`);
+					}
+				}
+			} catch (error) {
+				log(`mental model ensure 失败（忽略）：${error?.message ?? error}`);
+			}
+		}
+		try {
+			const raw = await channel.client.listMentalModels({
+				detail: "content",
+				limit: 200,
+				signal,
+			});
+			const models = normalizeMentalModels(raw?.models ?? raw?.items ?? raw);
+			const wanted = Object.values(mentalModelIds(config, channel.label));
+			const mine = models.filter((model) => wanted.includes(model.id));
+			return renderMentalModelMessage(mine, { bankId: channel.client.bankId });
+		} catch (error) {
+			log(`mental model 取正文失败（忽略）：${error?.message ?? error}`);
+			return "";
+		}
+	}
 
 	const tools = [
 		{
@@ -316,6 +448,7 @@ export async function apply(ctx, rawConfig = {}) {
 						content,
 						tier,
 						context: context || undefined,
+						sessionId: exec?.agent?.id,
 						signal: exec?.signal,
 					});
 					return toolJson({
@@ -381,21 +514,27 @@ export async function apply(ctx, rawConfig = {}) {
 		{
 			name: "memory_status",
 			description:
-				"检查记忆服务连通性、当前 bank、项目标签与各层事实数量。用于排查「记忆读不到 / 写不进去」。",
+				"检查记忆服务连通性、当前 bank、项目标签、各层事实数量与任务队列健康度。用于排查「记忆读不到 / 写不进去」。",
 			parameters: { type: "object", properties: {}, additionalProperties: false },
 			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
 			execute: async (_args, exec) => {
 				try {
 					const channel = await requireChannel(exec);
 					const status = await channel.client.status({ signal: exec?.signal });
+					const bank = await channel.client.bankOverview({ signal: exec?.signal });
 					const layers = await layerCounts(channel, exec?.signal);
+					const layerDetail = await layerDetails(channel, exec?.signal);
+					const operations = await operationSummary(channel, config.operationsLimit, exec?.signal);
 					return toolJson({
 						...status,
+						bank,
 						projectLabel: channel.label,
 						workingDirectory: channel.dir,
 						scoping: config.scoping,
 						writeEnabled: config.writeEnabled,
 						layers,
+						layerDetail,
+						operations,
 					});
 				} catch (error) {
 					return toolError(`状态查询失败：${error?.message ?? error}`);
@@ -405,14 +544,19 @@ export async function apply(ctx, rawConfig = {}) {
 		{
 			name: "memory_hygiene",
 			description:
-				"整理共享记忆库（DSH 与 omp 同一个 bank，改一处两端同时见效）。action=preview 只读地列出近重复事实与各层分布；action=prune 作废近重复事实（每组保留最新一条，服务端可逆：state 可改回 valid）；action=consolidate 触发服务端合并 observation；action=scopes 查看各层 observation 数量；action=strategies-preview 预览分层口径的命中情况。",
+				"整理共享记忆库（DSH 与 omp 同一个 bank，改一处两端同时见效）。scope 选层：project=本项目层，global=跨项目全局层（无 tag，所有项目可见），other=其它项目层，all=整库。action=preview 只读地列出近重复事实与各层分布；action=layers 只读地给出每层的条数、事实类型分布与最近更新时间；action=prune 作废近重复事实（每组保留最新一条，服务端可逆：state 可改回 valid）；action=consolidate 触发服务端合并 observation；action=scopes 查看各层 observation 数量；action=strategies-preview 预览分层口径的命中情况。",
 			parameters: {
 				type: "object",
 				properties: {
 					action: {
 						type: "string",
-						enum: ["preview", "prune", "consolidate", "scopes", "strategies-preview"],
-						description: "要执行的整理动作，默认 preview（只读）。",
+						enum: ["preview", "layers", "prune", "consolidate", "scopes", "strategies-preview"],
+						description: "要执行的整理动作，默认 preview（只读）。layers 只读地给出每层的条数、类型分布与最近更新时间。",
+					},
+					scope: {
+						type: "string",
+						enum: ["all", "project", "global", "other"],
+						description: "作用范围：project=本项目层，global=跨项目全局层（无 tag），other=其它项目层，all=整库。默认取插件配置。",
 					},
 					dryRun: {
 						type: "boolean",
@@ -461,12 +605,30 @@ export async function apply(ctx, rawConfig = {}) {
 					const raw = await client.listFacts({ limit, signal: exec?.signal });
 					const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
 					const active = facts.filter((f) => (f?.state ?? "valid") === "valid");
-					const { groups, crossScope, scanned } = findDuplicateGroups(active, {
+					const scope = normalizeHygieneScope(args?.scope, config.hygieneScope);
+					const scoped = filterByScope(active, scope, channel.label);
+					const details = describeLayers(active, channel.label);
+
+					if (action === "layers") {
+						return toolJson({
+							ok: true,
+							action: "layers",
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							scanned: active.length,
+							scope,
+							layers: details,
+							note:
+								"全局层=无 tag，所有项目可见且服务端不会自动淘汰；项目层=带 project 标签，有 observation 上限兜底。",
+						});
+					}
+
+					const { groups, crossScope, scanned } = findDuplicateGroups(scoped, {
 						threshold,
 						maxFacts: limit,
 					});
 					const plan = planPrune(groups);
-					const layers = countLayers(active, channel.label);
+					const layers = countLayers(scoped, channel.label);
 
 					if (action === "prune") {
 						const dryRun = args?.dryRun !== false;
@@ -524,6 +686,202 @@ export async function apply(ctx, rawConfig = {}) {
 				description: String(args?.action ?? "preview"),
 			}),
 		},
+		{
+			name: "memory_mental_models",
+			description:
+				"维护 mental model（精神模型）层：服务端从事实层归纳出来的长期画像，可注入会话。action=ensure 幂等确保「用户偏好 + 本项目约定 + 本项目决策」三个模型存在（缺的创建、标签不符的修正）；action=list 列模型元数据与健康状态；action=content 取正文；action=refresh 触发增量刷新（异步）；action=patch 改内容或标签。",
+			parameters: {
+				type: "object",
+				properties: {
+					action: {
+						type: "string",
+						enum: ["ensure", "list", "content", "refresh", "patch"],
+						description: "要执行的动作，默认 list。",
+					},
+					id: {
+						type: "string",
+						description: "目标模型 id（refresh / patch 必填；content 留空则取全部）。",
+					},
+					content: {
+						type: "string",
+						description: "patch 时的新正文。",
+					},
+					tags: {
+						type: "array",
+						items: { type: "string" },
+						description: "patch 时的新标签。",
+					},
+				},
+				required: [],
+			},
+			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
+			execute: async (args, exec) => {
+				try {
+					const channel = await requireChannel(exec);
+					const client = channel.client;
+					const action = String(args?.action ?? "list");
+					const scope = computeBankScope(config, channel.label);
+					const projectTags = scope.retainTags ?? [];
+					const ids = mentalModelIds(config, channel.label);
+
+					if (action === "list" || action === "content") {
+						const detail = action === "content" ? "content" : "metadata";
+						const raw = await client.listMentalModels({
+							detail,
+							limit: 200,
+							signal: exec?.signal,
+						});
+						const models = normalizeMentalModels(raw?.models ?? raw?.items ?? raw);
+						const filtered = args?.id
+							? models.filter((model) => model.id === String(args.id))
+							: models;
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							expectedIds: ids,
+							count: filtered.length,
+							models: filtered,
+						});
+					}
+
+					if (action === "ensure") {
+						const specs = mentalModelSpecs(config, channel.label, projectTags);
+						const raw = await client.listMentalModels({
+							detail: "metadata",
+							limit: 200,
+							signal: exec?.signal,
+						});
+						const existing = raw?.models ?? raw?.items ?? raw ?? [];
+						const plan = planEnsure(existing, specs);
+						const results = [];
+						for (const spec of plan.create) {
+							try {
+								const created = await client.createMentalModel(spec, { signal: exec?.signal });
+								results.push({ id: spec.id, action: "created", operationId: created?.operation_id });
+							} catch (error) {
+								// 409 = 别的进程刚建过（POST 是仅创建语义），不是失败。
+								const conflict = /409/.test(String(error?.message ?? ""));
+								results.push({
+									id: spec.id,
+									action: conflict ? "exists" : "failed",
+									error: error?.message,
+								});
+							}
+						}
+						for (const item of plan.patch) {
+							try {
+								await client.patchMentalModel(item.id, { tags: item.tags }, { signal: exec?.signal });
+								results.push({ id: item.id, action: "tags-patched", tags: item.tags });
+							} catch (error) {
+								results.push({ id: item.id, action: "failed", error: error?.message });
+							}
+						}
+						for (const item of plan.keep) {
+							results.push({ id: item.id, action: "kept", tags: item.tags });
+						}
+						return toolJson({
+							ok: true,
+							action,
+							bankId: client.bankId,
+							projectLabel: channel.label,
+							created: plan.create.length,
+							patched: plan.patch.length,
+							kept: plan.keep.length,
+							results,
+						});
+					}
+
+					if (action === "refresh") {
+						const target = String(args?.id ?? "").trim();
+						const list = target ? [target] : Object.values(ids);
+						const results = [];
+						for (const id of list) {
+							try {
+								const refreshed = await client.refreshMentalModel(id, { signal: exec?.signal });
+								results.push({ id, action: "queued", operationId: refreshed?.operation_id });
+							} catch (error) {
+								results.push({ id, action: "failed", error: error?.message });
+							}
+						}
+						return toolJson({ ok: true, action, bankId: client.bankId, results });
+					}
+
+					if (action === "patch") {
+						const id = String(args?.id ?? "").trim();
+						if (!id) return toolError("memory_mental_models patch 需要 id");
+						const patch = {};
+						if (typeof args?.content === "string" && args.content.trim()) {
+							patch.content = args.content.trim();
+						}
+						if (Array.isArray(args?.tags)) {
+							patch.tags = args.tags.map((tag) => String(tag));
+						}
+						if (Object.keys(patch).length === 0) {
+							return toolError("memory_mental_models patch 需要 content 或 tags");
+						}
+						const updated = await client.patchMentalModel(id, patch, { signal: exec?.signal });
+						return toolJson({ ok: true, action, bankId: client.bankId, id, patch, result: updated });
+					}
+
+					return toolError(`memory_mental_models 不支持的动作：${action}`);
+				} catch (error) {
+					log(`memory_mental_models failed: ${error?.message ?? error}`);
+					return toolError(`精神模型操作失败：${error?.message ?? error}`);
+				}
+			},
+		},
+		{
+			name: "memory_operations",
+			description:
+				"查看并处理服务端任务队列。失败与僵尸任务**不会自动重试**（服务端 retry_count=0、next_retry_at=null），所以写入「没查到」时先看这里。action=list 列出最近的 operation 及其状态；action=retry 重试指定 operation；action=delete 删除卡住的 operation（真删，会清掉僵尸 pending 行）。",
+			parameters: {
+				type: "object",
+				properties: {
+					action: {
+						type: "string",
+						enum: ["list", "retry", "delete"],
+						description: "要执行的动作，默认 list。",
+					},
+					operationId: {
+						type: "string",
+						description: "retry / delete 的目标 operation id。",
+					},
+					limit: {
+						type: "number",
+						description: "list 时取多少条，默认取插件配置。",
+					},
+				},
+				required: [],
+			},
+			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
+			execute: async (args, exec) => {
+				try {
+					const channel = await requireChannel(exec);
+					const client = channel.client;
+					const action = String(args?.action ?? "list");
+					if (action === "list") {
+						const limit = Number.isFinite(Number(args?.limit))
+							? Math.min(200, Math.max(1, Math.trunc(Number(args.limit))))
+							: config.operationsLimit;
+						const summary = await operationSummary(channel, limit, exec?.signal);
+						return toolJson({ ok: true, action, bankId: client.bankId, ...summary });
+					}
+					const operationId = String(args?.operationId ?? "").trim();
+					if (!operationId) return toolError(`memory_operations ${action} 需要 operationId`);
+					if (action === "retry") {
+						const result = await client.retryOperation(operationId, { signal: exec?.signal });
+						return toolJson({ ok: true, action, bankId: client.bankId, operationId, result });
+					}
+					const result = await client.deleteOperation(operationId, { signal: exec?.signal });
+					return toolJson({ ok: true, action, bankId: client.bankId, operationId, result });
+				} catch (error) {
+					log(`memory_operations failed: ${error?.message ?? error}`);
+					return toolError(`任务队列操作失败：${error?.message ?? error}`);
+				}
+			},
+		},
 	];
 
 	for (const tool of tools) {
@@ -549,32 +907,49 @@ export async function apply(ctx, rawConfig = {}) {
 					const channel = await channelFor(payload.agent);
 					if (!channel || channel.primed) return decision;
 					channel.primed = true;
+					const messages = [...decision.messages];
 					const query = extractUserPrompt(decision.messages) || extractUserPrompt(payload.messages);
-					if (!query) return decision;
-					const result = await channel.client.recall({
-						query,
-						scope: SCOPE.PROJECT,
-						signal: payload.signal,
-					});
-					if (!result.facts.length) return decision;
-					const message = {
-						id: randomUUID(),
-						role: "user",
-						content: [
-							{
-								type: "text",
-								text: renderRecallMessage(result.facts, {
-									bankId: result.bankId,
-									scope: SCOPE.PROJECT,
-								}),
-							},
-						],
-						source: { kind: "plugin:dsh-hindsight-memory", form: "recall" },
-					};
-					return {
-						kind: "enter",
-						messages: [...decision.messages, message],
-					};
+					if (query) {
+						try {
+							const result = await channel.client.recall({
+								query,
+								scope: SCOPE.PROJECT,
+								signal: payload.signal,
+							});
+							if (result.facts.length) {
+								messages.push({
+									id: randomUUID(),
+									role: "user",
+									content: [
+										{
+											type: "text",
+											text: renderRecallMessage(result.facts, {
+												bankId: result.bankId,
+												scope: SCOPE.PROJECT,
+											}),
+										},
+									],
+									source: { kind: "plugin:dsh-hindsight-memory", form: "recall" },
+								});
+							}
+						} catch (error) {
+							log(`自动召回失败（忽略）：${error?.message ?? error}`);
+						}
+					}
+					// 精神模型层：与 omp 对齐（会话首轮注入一次正文）。
+					if (config.mentalModels && config.injectMentalModels) {
+						const block = await mentalModelBlock(channel, payload.signal);
+						if (block) {
+							messages.push({
+								id: randomUUID(),
+								role: "user",
+								content: [{ type: "text", text: block }],
+								source: { kind: "plugin:dsh-hindsight-memory", form: "mental-models" },
+							});
+						}
+					}
+					if (messages.length === decision.messages.length) return decision;
+					return { kind: "enter", messages };
 				} catch (error) {
 					log(`自动召回失败（忽略）：${error?.message ?? error}`);
 					return decision;
@@ -592,6 +967,10 @@ export async function apply(ctx, rawConfig = {}) {
 				if (payload?.agent?.parentAgent) return;
 				const channel = await channelFor(payload?.agent);
 				if (!channel) return;
+				// 对齐 omp：每 N 个回合留一次（默认 3），否则项目层会被对话噪声灌满。
+				channel.turnCount = (channel.turnCount ?? 0) + 1;
+				const every = Math.max(1, config.retainEveryNTurns);
+				if (channel.turnCount % every !== 0) return;
 				const messages = payload?.turn?.messages;
 				if (!Array.isArray(messages) || messages.length === 0) return;
 				const text = messages
@@ -604,6 +983,7 @@ export async function apply(ctx, rawConfig = {}) {
 					content: sanitizeMemoryText(text.slice(-4000)),
 					tier: TIER.PROJECT,
 					context: "auto-retain from DSH turn",
+					sessionId: payload?.agent?.id,
 					signal: payload?.signal,
 				});
 			} catch (error) {

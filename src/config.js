@@ -40,7 +40,8 @@ export const DEFAULTS = {
 	 *  注意：本插件的自动留存是「本回合文本」简化版（omp 是整段 session 重发），
 	 *  想完全关掉自动写入：在插件配置里把 writeEnabled 或 autoRetain 置 false 即可。 */
 	autoRetain: true,
-	/** 自动留存的回合间隔。 */
+	/** 自动留存的回合间隔。omp 的 hindsight.retainEveryNTurns 默认 3 ⇒ 保持一致，
+	 *  避免项目层被每轮对话噪声灌满（实测未限流时项目层 137 条 vs 全局层 23 条）。 */
 	retainEveryNTurns: 3,
 	/** 注入段顺序（字面数字）。 */
 	sectionOrder: 950,
@@ -66,11 +67,27 @@ export const DEFAULTS = {
 		"只保留跨项目长期有效的约定、环境事实与用户偏好；不保留一次性进度、临时状态与重复表述。",
 	/** 全局层 observation 条数上限。 */
 	hygieneGlobalMaxObservations: 30,
+	/** 记忆卫生默认作用的层：all | project | global | other。 */
+	hygieneScope: "all",
+	/** 是否维护 mental model（精神模型）层。omp 侧有，DSH 侧补齐才算行为对齐。 */
+	mentalModels: true,
+	/** 是否把 mental model 正文注入会话（与 omp 的注入行为对齐）。 */
+	injectMentalModels: true,
+	/** mental model id 前缀。与 omp 的 id 空间分开，避免 409 与 tags 抢写。 */
+	mentalModelPrefix: "dsh",
+	/** 全局 mental model（user-preferences）的最大 token。 */
+	mentalModelUserMaxTokens: 600,
+	/** 项目级 mental model（conventions / decisions）的最大 token。 */
+	mentalModelProjectMaxTokens: 800,
+	/** 运维观测：列 operation 时取多少条。 */
+	operationsLimit: 20,
 };
 
 const BUDGETS = new Set(["low", "mid", "high"]);
 const SCOPINGS = new Set(["global", "per-project", "per-project-tagged"]);
 const FACT_TYPES = new Set(["world", "experience", "observation"]);
+/** 记忆卫生可作用的层。 */
+const HYGIENE_SCOPES = new Set(["all", "project", "global", "other"]);
 
 function bool(value, fallback) {
 	return typeof value === "boolean" ? value : fallback;
@@ -165,5 +182,23 @@ export function normalizeConfig(raw = {}) {
 			1,
 			500,
 		),
+		hygieneScope: HYGIENE_SCOPES.has(raw.hygieneScope) ? raw.hygieneScope : DEFAULTS.hygieneScope,
+		mentalModels: bool(raw.mentalModels, DEFAULTS.mentalModels),
+		injectMentalModels: bool(raw.injectMentalModels, DEFAULTS.injectMentalModels),
+		mentalModelPrefix: str(raw.mentalModelPrefix, DEFAULTS.mentalModelPrefix),
+		mentalModelUserMaxTokens: int(
+			raw.mentalModelUserMaxTokens,
+			DEFAULTS.mentalModelUserMaxTokens,
+			// 服务端硬性要求 max_tokens >= 256，否则 422 greater_than_equal。
+			256,
+			8_000,
+		),
+		mentalModelProjectMaxTokens: int(
+			raw.mentalModelProjectMaxTokens,
+			DEFAULTS.mentalModelProjectMaxTokens,
+			256,
+			8_000,
+		),
+		operationsLimit: int(raw.operationsLimit, DEFAULTS.operationsLimit, 1, 200),
 	};
 }

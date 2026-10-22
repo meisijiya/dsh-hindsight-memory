@@ -250,15 +250,42 @@ export function truncateQuery(query, maxChars) {
 }
 
 /**
+ * 本地时区 ISO 时间戳（带 +08:00 这类偏移）。
+ * 对齐 omp 的 retain：写入必须带本地时区时间戳，否则服务端按 UTC 解释。
+ *
+ * @param {Date} [date]
+ * @returns {string}
+ */
+export function localTimestamp(date = new Date()) {
+	const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+	const pad = (n) => String(n).padStart(2, "0");
+	const offsetMinutes = -d.getTimezoneOffset();
+	const sign = offsetMinutes >= 0 ? "+" : "-";
+	const abs = Math.abs(offsetMinutes);
+	return (
+		`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+		`T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+		`${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+	);
+}
+
+/**
  * 生成写入 body（REST 形态）。MCP 走同构参数。
  *
  * @param {object} options
- * @returns {{items: Array<{content: string, context?: string, tags: string[]}>}}
+ * @param {string} options.content
+ * @param {string} [options.context]
+ * @param {string[]} [options.tags]
+ * @param {string} [options.timestamp] 本地时区 ISO 时间戳
+ * @param {string} [options.sessionId] 会话 id，落进 metadata.session_id
+ * @returns {{items: Array<{content: string, context?: string, tags: string[], timestamp?: string, metadata?: {session_id: string}}>}}
  */
-export function buildRetainPayload({ content, context, tags }) {
+export function buildRetainPayload({ content, context, tags, timestamp, sessionId }) {
 	const item = { content: String(content ?? "").trim() };
 	const ctx = typeof context === "string" ? context.trim() : "";
 	if (ctx) item.context = ctx;
 	item.tags = Array.isArray(tags) ? [...tags] : [];
+	if (timestamp) item.timestamp = String(timestamp);
+	if (sessionId) item.metadata = { session_id: String(sessionId) };
 	return { items: [item] };
 }

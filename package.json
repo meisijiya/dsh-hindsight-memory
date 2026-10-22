@@ -1,6 +1,6 @@
 {
 	"name": "dsh-hindsight-memory",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"description": "DeepSeek Harness plugin that bridges the Hindsight memory service to DSH with omp-identical read/write semantics (single shared bank, project tag stamping, project+global recall).",
 	"type": "module",
 	"main": "src/index.js",

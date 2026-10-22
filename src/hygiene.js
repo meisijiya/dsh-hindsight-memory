@@ -186,6 +186,80 @@ export function planPrune(groups) {
 	return { keep, invalidate };
 }
 
+/**
+ * 分层过滤：把事实集合裁到指定的一层。
+ *
+ * 层的定义（与 Hindsight 的标签语义一一对应）：
+ *   - `global`  全局层：**无 tag**。所有项目都能看到（tag 白名单语义：无 tag 恒可见）。
+ *   - `project` 本项目层：带 `project:<本项目标签>`。
+ *   - `other`   其它项目层：带 tag 但不含本项目标签。
+ *   - `all`     不裁剪。
+ *
+ * @param {Array} facts 事实列表。
+ * @param {"global"|"project"|"other"|"all"} scope 层。
+ * @param {string} projectLabel 本项目标签（小写）。
+ * @returns {Array} 过滤后的事实。
+ */
+export function filterByScope(facts, scope = "all", projectLabel = "") {
+	const list = Array.isArray(facts) ? facts : [];
+	const projectTag = `project:${projectLabel}`;
+	switch (scope) {
+		case "global":
+			return list.filter((fact) => (Array.isArray(fact?.tags) ? fact.tags : []).length === 0);
+		case "project":
+			return list.filter((fact) =>
+				(Array.isArray(fact?.tags) ? fact.tags : []).includes(projectTag),
+			);
+		case "other":
+			return list.filter((fact) => {
+				const tags = Array.isArray(fact?.tags) ? fact.tags : [];
+				return tags.length > 0 && !tags.includes(projectTag);
+			});
+		default:
+			return list;
+	}
+}
+
+/**
+ * 分层体检：每层的条数、事实类型分布、最近更新时间。
+ *
+ * 用途（对应用户诉求「项目级和全局级的维护工具要封装好」）：
+ *   全局层是**无 tag**的，写进去就是所有项目可见、且没有任何服务端淘汰机制；
+ *   项目层有 observation 上限兜着。所以维护的第一步是**看清每层有多大、长什么样**。
+ *
+ * @param {Array} facts 事实列表（通常是活跃事实）。
+ * @param {string} projectLabel 本项目标签（小写）。
+ * @returns {{global: object, project: object, other: object, total: number}}
+ */
+export function describeLayers(facts, projectLabel = "") {
+	const list = Array.isArray(facts) ? facts : [];
+	const projectTag = `project:${projectLabel}`;
+	const buckets = { global: [], project: [], other: [] };
+	for (const fact of list) {
+		const tags = Array.isArray(fact?.tags) ? fact.tags : [];
+		if (tags.length === 0) buckets.global.push(fact);
+		else if (tags.includes(projectTag)) buckets.project.push(fact);
+		else buckets.other.push(fact);
+	}
+	const describe = (items) => {
+		const byType = {};
+		let latest = null;
+		for (const fact of items) {
+			const type = factType(fact);
+			byType[type] = (byType[type] ?? 0) + 1;
+			const at = fact?.updated_at ?? fact?.created_at ?? null;
+			if (at && (latest === null || String(at) > String(latest))) latest = at;
+		}
+		return { count: items.length, byType, latestUpdatedAt: latest };
+	};
+	return {
+		global: describe(buckets.global),
+		project: describe(buckets.project),
+		other: describe(buckets.other),
+		total: list.length,
+	};
+}
+
 /** 供面板/工具输出的精简摘要。 */
 export function summarizeGroups(groups, { limit = 5 } = {}) {
 	return (Array.isArray(groups) ? groups : []).slice(0, limit).map((group) => ({

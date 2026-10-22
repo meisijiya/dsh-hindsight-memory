@@ -14,8 +14,10 @@ import { McpHttpClient, McpError } from "./mcp.js";
 import {
 	SCOPE,
 	TIER,
+	buildRetainPayload,
 	computeBankScope,
 	filterUntagged,
+	localTimestamp,
 	normalizeFacts,
 	recallFilter,
 	retainTags,
@@ -138,7 +140,7 @@ export class HindsightMemoryClient {
 	 * @param {string} [options.tier] TIER.PROJECT | TIER.GLOBAL
 	 * @param {string} [options.context]
 	 */
-	async retain({ content, tier = TIER.PROJECT, context, signal } = {}) {
+	async retain({ content, tier = TIER.PROJECT, context, sessionId, signal } = {}) {
 		const text = String(content ?? "").trim();
 		if (!text) throw new HindsightError("retain 需要非空 content");
 		if (!this.config.writeEnabled) {
@@ -146,28 +148,37 @@ export class HindsightMemoryClient {
 		}
 		const tags = retainTags(this.config, this.label, tier);
 		const ctx = typeof context === "string" && context.trim() ? context.trim() : undefined;
+		// 对齐 omp：写入带本地时区时间戳 + metadata.session_id，便于按会话回溯。
+		const timestamp = localTimestamp();
+		const session = sessionId ? String(sessionId) : undefined;
 
 		const result =
 			this.config.transport === "mcp"
-				? await this.retainViaMcp(text, tags, ctx, signal)
-				: await this.retainViaRest(text, tags, ctx, signal);
-		return { tags, tier, result };
+				? await this.retainViaMcp(text, tags, ctx, { timestamp, sessionId: session }, signal)
+				: await this.retainViaRest(text, tags, ctx, { timestamp, sessionId: session }, signal);
+		return { tags, tier, timestamp, result };
 	}
 
-	async retainViaMcp(content, tags, context, signal) {
+	async retainViaMcp(content, tags, context, extra, signal) {
 		const client = await this.mcpClient({ signal });
 		const args = { content, tags };
 		if (context) args.context = context;
+		if (extra?.timestamp) args.timestamp = extra.timestamp;
+		if (extra?.sessionId) args.metadata = { session_id: extra.sessionId };
 		return client.callTool("retain", args, { signal });
 	}
 
-	async retainViaRest(content, tags, context, signal) {
-		const item = { content };
-		if (context) item.context = context;
-		item.tags = tags;
+	async retainViaRest(content, tags, context, extra, signal) {
+		const payload = buildRetainPayload({
+			content,
+			context,
+			tags,
+			timestamp: extra?.timestamp,
+			sessionId: extra?.sessionId,
+		});
 		return this.postJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/memories`,
-			{ items: [item], async: true },
+			{ ...payload, async: true },
 			{ signal, timeoutMs: this.config.retainTimeoutMs },
 		);
 	}
@@ -204,6 +215,61 @@ export class HindsightMemoryClient {
 	}
 
 	// ─────────────────────────── 状态 ───────────────────────────
+
+	/**
+	 * bank 概览 + 体检告警。
+	 *
+	 * 报告 §6 的坑：同名空 legacy bank 会伪装成「召回为空」，
+	 * 所以每次判断召回问题前都要先核对 bank 的 fact_count。
+	 *
+	 * @param {object} options
+	 * @returns {Promise<{bankId: string, factCount: number|null, documentCount: number|null, totalBanks: number, warnings: string[]}>}
+	 */
+	async bankOverview({ signal } = {}) {
+		const out = {
+			bankId: this.bankId,
+			factCount: null,
+			documentCount: null,
+			totalBanks: 0,
+			warnings: [],
+		};
+		try {
+			const payload = await this.getJson("/v1/default/banks", { signal });
+			const list = Array.isArray(payload)
+				? payload
+				: Array.isArray(payload?.banks)
+					? payload.banks
+					: Array.isArray(payload?.items)
+						? payload.items
+						: [];
+			out.totalBanks = list.length;
+			const target = list.find((b) => (b?.bank_id ?? b?.id) === this.bankId);
+			if (target) {
+				out.factCount = target?.fact_count ?? null;
+				out.documentCount = target?.document_count ?? null;
+			} else {
+				out.warnings.push(
+					`bank "${this.bankId}" 不在服务端 bank 列表里（现有：${list
+						.map((b) => b?.bank_id ?? b?.id)
+						.join(", ") || "无"}）`,
+				);
+			}
+			if (out.factCount === 0) {
+				out.warnings.push(
+					`bank "${this.bankId}" 的 fact_count = 0；同名空 legacy bank 会伪装成「召回为空」，先核对 bank 名字再下结论`,
+				);
+			}
+			const siblings = list
+				.map((b) => b?.bank_id ?? b?.id)
+				.filter((id) => id && id !== this.bankId && String(id).includes(String(this.bankId).split("-")[0]));
+			if (siblings.length > 0) {
+				out.warnings.push(`存在同名近邻 bank：${siblings.join(", ")}（注意 legacy 空库干扰）`);
+			}
+		} catch (error) {
+			out.warnings.push(`读取 bank 列表失败：${error?.message ?? error}`);
+		}
+		return out;
+	}
 
 	/** 健康与 bank 列表。 */
 	async status({ signal } = {}) {
@@ -283,6 +349,101 @@ export class HindsightMemoryClient {
 	async bankConfig({ signal } = {}) {
 		return this.getJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/config`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	// ────────────────────── Mental model 层 ──────────────────────
+	// 🔴 这些接口**只走 REST**：服务端把 MCP 工具面收窄到 7 个安全工具，
+	//    mental model 的管理接口不在其中（它们是写操作，会改 bank 的画像）。
+	//    报告 §6.2：DSH 侧**不要** PUT /banks 覆写 mission；mental model 是可以写的。
+
+	/** 列 mental model（detail=metadata | content）。 */
+	async listMentalModels({ detail = "metadata", limit = 200, signal } = {}) {
+		const query = new URLSearchParams({
+			detail: String(detail),
+			limit: String(limit),
+			offset: "0",
+		});
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models?${query.toString()}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 读单个 mental model。 */
+	async getMentalModel(id, { signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/**
+	 * 创建 mental model（**仅创建**）：重复 id 返回 409，且不会改写已有模型的 tags。
+	 * @param {object} spec { id, name, source_query, tags?, max_tokens, trigger }
+	 */
+	async createMentalModel(spec, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models`,
+			spec,
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	/** 改 mental model（POST 改不了 tags，只能 PATCH）。 */
+	async patchMentalModel(id, patch, { signal } = {}) {
+		return this.patchJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}`,
+			patch,
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	/** 触发增量刷新（异步，返回 operation_id）。 */
+	async refreshMentalModel(id, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/refresh`,
+			{},
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	// ────────────────────── 运维观测（operations） ──────────────────────
+	// 报告 §6.10：**失败任务不会自动重试**（retry_count=0、next_retry_at=null），
+	// 必须主动 retry / delete；不观测就会出现「写进去了但查不到」的静默故障。
+
+	/** 列 operation（异步任务队列）。 */
+	async listOperations({ limit = 20, signal } = {}) {
+		const query = new URLSearchParams({ limit: String(limit), offset: "0" });
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/operations?${query.toString()}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 重试一个 operation。 */
+	async retryOperation(operationId, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/operations/${encodeSegment(operationId)}/retry`,
+			{},
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	/** 删除一个 operation（真删；报告 §10 用它清僵尸 pending 行）。 */
+	async deleteOperation(operationId, { signal } = {}) {
+		const response = await this.fetchWithTimeout(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/operations/${encodeSegment(operationId)}`,
+			{ method: "DELETE", signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+		return this.parse(response);
+	}
+
+	/** bank 统计（total_nodes / pending_operations / failed_operations …）。 */
+	async bankStats({ signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/stats`,
 			{ signal, timeoutMs: this.config.recallTimeoutMs },
 		);
 	}
