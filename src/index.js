@@ -296,6 +296,14 @@ export async function apply(ctx, rawConfig = {}) {
 		return;
 	}
 
+	// 看板在没有活跃会话时也要能给出「本项目」这一层 ⇒ 预先算好进程 cwd 的标签。
+	let fallbackLabel = "";
+	try {
+		fallbackLabel = await resolveProjectLabel(process.cwd(), config.projectLabelOverride);
+	} catch {
+		fallbackLabel = config.projectLabelOverride || "";
+	}
+
 	// ── 1) 常驻系统提示词段（常量文本，字节稳定）────────────────────────
 	if (config.inject) {
 		const dispose = ctx.systemPrompt.section({
@@ -372,15 +380,20 @@ export async function apply(ctx, rawConfig = {}) {
 	} else {
 		ctx.inject(["connection"], (scope) => {
 			try {
-				// scope.get 是声明了 inject 后的正规取法；取不到再回落 root 上的属性。
-				const connection = scope.get?.("connection") ?? scope.root?.connection;
+				// 🔴 必须优先取 root 上的 connection 实例（与 dsh-rewind-plugin 同款）：
+				//    connection.rpc.handle() 内部会走 `owner.effect(() => owner.webServer.register(...))`，
+				//    而 owner = 该实例自己的 this.ctx。scope.get("connection") 拿到的是
+				//    声明 inject 的那个 fiber 视角下的实例，它的 ctx 解析不到 webServer，
+				//    注册会抛 `cannot get property "webServer" without inject`（表现为通道 405）。
+				//    root 上的实例其 ctx 能解析 webServer。
+				const connection = scope.root?.connection ?? scope.get?.("connection");
 				if (!connection) return;
 				/** 取当前项目标签：优先用最近活跃会话的标签，否则按进程 cwd 推导。 */
 				const resolveLabel = () => {
 					for (const channel of channels.values()) {
 						if (channel.label) return channel.label;
 					}
-					return config.projectLabelOverride || "";
+					return config.projectLabelOverride || fallbackLabel || "";
 				};
 				const dispose = connection.rpc.handle(
 					PANEL_RPC_CHANNEL,

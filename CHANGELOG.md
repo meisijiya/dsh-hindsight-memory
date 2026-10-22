@@ -5,6 +5,15 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.7.1 — 修看板通道注册失败（取 connection 必须 root 优先）
+
+- 现象（活体复现）：插件详情页的「记忆看板」取数 405 —— `POST /dsh-hindsight-memory/overview` 报 Method Not Allowed，而同宿主其它通道（`/dsh-rewind/preview`）返回 401（路由存在、只是缺 cookie）。说明**通道压根没注册上**，不是鉴权问题。
+- 根因（源码级）：宿主 `connection.rpc.handle(channel, handler)` 内部会执行 `owner.effect(() => owner.webServer.register(route))`，其中 `owner` 是**该 connection 实例自己的 ctx**。`scope.get("connection")` 拿到的是当前 fiber 视角下的实例，它的 ctx 解析不到 `webServer`，注册直接抛 `cannot get property "webServer" without inject`；`scope.root.connection` 拿到的实例其 ctx 能解析 webServer。v0.7.0 用了 `scope.get(...) ?? scope.root...` 的顺序 ⇒ 永远取到坏的那个。
+- 修复：改成与 `dsh-rewind-plugin` 完全一致的 **`scope.root?.connection ?? scope.get?.("connection")`**（root 优先）。新增一条回归单测：构造"scope.get 返回会抛错的实例、scope.root 返回正常实例"的假 ctx，断言通道注册成功且通道名为 `/dsh-hindsight-memory`（共 108 条全绿）。
+- 附带修复：看板在没有活跃会话时拿不到项目标签（`project` 层恒为 0、其余全落到"其它项目层"）⇒ 装载时预先按**进程 cwd** 解析一份兜底标签（与 omp 同规则：主 checkout 根 basename 小写），标签解析失败再回落配置项 `projectLabelOverride`。
+- 活体验收（独立实例，未动用户实例）：`POST /dsh-hindsight-memory/overview` 带有效会话 cookie ⇒ **HTTP 200**，返回 `ok:true` 与完整快照（bank 539 条事实、全局层 131 / 项目层与其它项目层按标签正确归类、audit 计数、精神模型与知识页清单、公开配置 20 键）。
+- 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增。
+
 ## 0.7.0 — 插件详情页记忆看板（只读）
 
 - 新增：插件详情页多一个「记忆看板」区块，直接看当前记忆库状态——记忆库条数与告警、全局层/项目层/其它项目层分层与事实类型分布、近重复组、体检计数（陈旧/孤儿 observation/被取代/空知识页/卡住任务）、任务状态分布、精神模型与知识页清单（陈旧的会标出来），可手动刷新。

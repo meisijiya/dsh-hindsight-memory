@@ -393,6 +393,7 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.1 | **修看板通道注册失败**：宿主 `connection.rpc.handle()` 内部要访问 `owner.webServer`，而 `scope.get("connection")` 拿到的是解析不到 webServer 的实例 ⇒ 注册抛 `cannot get property "webServer" without inject`（表现为通道 405）。改为 **root 优先**（与 dsh-rewind-plugin 一致），并补一条回归单测；另补进程 cwd 的兜底项目标签，避免无会话时分层全落到「其它项目层」 |
 | 0.7.0 | **插件详情页记忆看板（只读）**：服务端在宿主 `connection.rpc` 通道上注册 `/dsh-hindsight-memory`（7 个只读端点：overview/layers/audit/operations/models/pages/config），client 半体注册 `plugins.detail.section` 席位渲染看板。取数走服务端代理（Hindsight 无 CORS，浏览器不能直连）。**看板只读**：写操作仍必须走记忆工具的 confirm+reason 护栏 |
 | 0.1.0 | 首个可运行版本：四个封装工具 + omp 契约对齐（盖章/过滤/预算/异步语义） |
 | 0.2.0 | 记忆卫生层：`memory_hygiene` 工具 + `src/hygiene.js` + bank 级 consolidation 配置 + 终端面板卫生板块 |

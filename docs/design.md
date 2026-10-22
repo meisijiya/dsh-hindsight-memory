@@ -1108,3 +1108,51 @@ client 半体的 `exports.inject` 是**服务名**列表（`["slots", "connectio
 - 单测 105 → **107**（新增 16 条面板契约测试），全绿。
 - 活体：对真实 Hindsight 跑 RPC 处理器 ⇒ `overview` 返回 bank=shared / 事实 536 条、分层 global 134 / project 194 / other 172、近重复 0 组、孤儿 observation 4、任务 100（completed 96 / processing 4）、精神模型与知识页清单齐、config 20 键；7 个端点全部 `ok=true`，未知端点返回 `hindsight/unknown-endpoint`。
 - `dsh headless --patch <overlay>` 旁路装载正常（插件照常工作）。
+
+## 32. v0.7.1：看板通道注册失败（取 connection 必须 root 优先）
+
+### 32.1 现象
+插件详情页的「记忆看板」取数 405：`POST http://127.0.0.1:3080/dsh-hindsight-memory/overview` ⇒ **Method Not Allowed**；同一宿主里 `POST /dsh-rewind/preview` ⇒ **401 unauthorized**（路由存在、只是没带会话 cookie）。两者对比 ⇒ 不是鉴权问题，是**我们的通道压根没注册上**。
+
+### 32.2 取证链（每一步都有活体证据）
+1. `dsh --profile web --dump-config` ⇒ profile 里确有 `- id: hindsight-memory / name: dsh-hindsight-memory / config: {...}`，bundles 含本包 ⇒ 配置层没问题。
+2. 探针 1（最小插件，只做 `ctx.inject(["connection"], …)` ⇒ `scope.get("connection")` / `scope.root.connection` ⇒ `rpc.handle()`）：**注册成功** ⇒ 这条注入路径本身没问题。
+3. 探针 2（与本插件同款 `inject = ["tools","systemPrompt"]` + `systemPrompt.section` + `ctx.inject(["connection"])`，取用顺序 `viaRoot ?? viaGet`）：**注册成功**，通道 401。
+4. 探针 3（本插件源码副本 + 打点，取用顺序 `scope.get?.("connection") ?? scope.root?.connection`）：
+   ```
+   reaching rpc block; typeof ctx.inject=function
+   nested fired
+   viaGet=true viaRoot=true
+   handler built ok
+   registration threw: cannot get property "webServer" without inject
+   ```
+   ⇒ 两个取值都非空，但**是不同实例**，且先取到的那个注册必炸。
+
+### 32.3 根因（宿主源码级）
+`dsh-client-connection/lib/index.js`：
+```js
+get rpc() {
+    const owner = this.ctx;
+    return { handle: (channel, handler) => this.register(owner, channel, handler), ... };
+}
+register(owner, channel, handler) {
+    ...
+    return owner.effect(() => owner.webServer.register(route), `client-connection: ${channel} rpc channel`);
+}
+```
+`owner` = 该 service 实例自己的 `this.ctx`。`scope.get("connection")` 解析到的是**声明 inject 的那个 fiber 视角**下的实例，其 ctx 解析不到 `webServer` ⇒ `owner.webServer` 抛 `cannot get property "webServer" without inject`；`scope.root.connection` 拿到的实例其 ctx 能解析 webServer（同宿主 `dsh-rewind-plugin` 用的就是 `scope.root.connection`）。
+⇒ **取用顺序必须 root 优先**，这是宿主的隐含契约，不写在类型里。
+
+### 32.4 修复
+- `src/index.js`：`const connection = scope.root?.connection ?? scope.get?.("connection");`（并把原因写进注释，避免后人"优化"回去）。
+- `test/panel.test.js` 新增回归单测：假 ctx 里 `scope.get` 返回一个 `rpc.handle` 会抛 `cannot get property "webServer" without inject` 的实例、`scope.root.connection` 返回正常实例 ⇒ 断言通道注册成功且通道名为 `/dsh-hindsight-memory`。共 **108** 条单测全绿。
+- 附带修复：装载时按**进程 cwd** 预解析一份兜底项目标签（omp 同规则：主 checkout 根 basename 小写），无活跃会话时 `project` 层不再恒为 0。
+
+### 32.5 活体验收（独立实例，未动用户实例）
+- 独立起 `dsh --profile web --patch <overlay> --port 3093 --no-open`（用户实例 3080/3081 未受影响），带本插件源码副本（改名 section 与通道名避免撞名）。
+- `POST /dsh-hindsight-memory5/overview` 带自铸会话 cookie ⇒ **HTTP 200**，`result.ok=true`，快照完整：bank=shared / 539 条事实、分层 global 131（world 83 + observation 48）、audit 计数（孤儿 observation 6、近重复 0 组、空页 0、卡住任务 0）、精神模型 21 条、知识页 1 条、公开配置 20 键。
+- 未带 cookie ⇒ 401（鉴权栅栏按预期生效）；未知端点 ⇒ `hindsight/unknown-endpoint`。
+
+### 32.6 运维提醒
+- 本地联调时**不要**让 profile 里的同名包与 `--patch` 注入的副本并存：两份会抢同一个 prompt section 名（`prompt section "hindsight:memory" is already registered`），先到先得 ⇒ 联调副本必须改 section 名与通道名。
+- 通道 405 = 没注册上；通道 401 = 注册成功但没带 cookie。两者含义完全不同，别混。

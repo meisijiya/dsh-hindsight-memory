@@ -197,6 +197,50 @@ test("RPC 处理器注册在宿主的 connection 通道上，而不是自建 HTT
 	assert.ok(indexSource.includes('PANEL_RPC_CHANNEL'), "通道名应来自 panel.js 的常量");
 });
 
+test("取 connection 必须 root 优先：scope.get 视角的实例解析不到 webServer", async () => {
+	// 回归 v0.7.0 的 405 事故：connection.rpc.handle() 内部会走
+	// `owner.effect(() => owner.webServer.register(...))`，owner 是实例自己的 this.ctx。
+	// scope.get("connection") 拿到的是当前 fiber 视角的实例（其 ctx 解析不到 webServer），
+	// 注册会抛 `cannot get property "webServer" without inject`；root 上的实例才可用。
+	const mod = await import("../src/index.js");
+	const registered = [];
+	const broken = {
+		rpc: {
+			handle: () => {
+				throw new Error('cannot get property "webServer" without inject');
+			},
+		},
+	};
+	const working = {
+		rpc: {
+			handle: (channel, handler) => {
+				registered.push({ channel, handler });
+				return () => {};
+			},
+		},
+	};
+	const ctx = {
+		tools: { register: () => {} },
+		systemPrompt: { section: () => () => {} },
+		logger: { warn: () => {} },
+		on: () => {},
+		effect: () => {},
+		workingDirectory: { get: () => process.cwd() },
+		inject: (deps, callback) => {
+			assert.deepEqual(deps, ["connection"]);
+			callback({
+				get: () => broken,
+				root: { connection: working },
+				effect: () => {},
+			});
+		},
+	};
+	await mod.apply(ctx, {});
+	assert.equal(registered.length, 1, "应通过 root 上的 connection 实例注册一次通道");
+	assert.equal(registered[0].channel, "/dsh-hindsight-memory");
+	assert.equal(typeof registered[0].handler, "function");
+});
+
 test("client 半体注册了 plugins.detail.section 席位并声明 connection 依赖", () => {
 	const clientSource = readFileSync(new URL("../src/ui-client.js", import.meta.url), "utf8");
 	assert.ok(clientSource.includes('ctx.slots.inject("plugins.detail.section"'), "应注册看板席位");
