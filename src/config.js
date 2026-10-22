@@ -52,6 +52,20 @@ export const DEFAULTS = {
 	reflectTimeoutMs: 120_000,
 	/** 传输层：rest | mcp。默认 mcp（服务端官方 per-bank MCP 端点）。 */
 	transport: "mcp",
+	/** 记忆卫生：近重复判定阈值（0-1）。越高越保守。 */
+	hygieneThreshold: 0.9,
+	/** 单次扫描的事实条数上限（防 O(n²) 爆掉）。 */
+	hygieneMaxFacts: 500,
+	/** 项目层 observation 口径（写进 bank 的 consolidation_strategies）。 */
+	hygieneProjectMission:
+		"只保留该项目中长期有效的技术决策、约定、硬约束与踩过的坑；不保留一次性进度、临时状态与重复表述。",
+	/** 项目层每个 scope 的 observation 条数上限。 */
+	hygieneProjectMaxObservations: 40,
+	/** 全局层 observation 口径（无标签 scope 只能靠 bank 级默认值兜住）。 */
+	hygieneGlobalMission:
+		"只保留跨项目长期有效的约定、环境事实与用户偏好；不保留一次性进度、临时状态与重复表述。",
+	/** 全局层 observation 条数上限。 */
+	hygieneGlobalMaxObservations: 30,
 };
 
 const BUDGETS = new Set(["low", "mid", "high"]);
@@ -132,5 +146,24 @@ export function normalizeConfig(raw = {}) {
 		retainTimeoutMs: int(raw.retainTimeoutMs, DEFAULTS.retainTimeoutMs, 1_000, 600_000),
 		reflectTimeoutMs: int(raw.reflectTimeoutMs, DEFAULTS.reflectTimeoutMs, 1_000, 600_000),
 		transport: raw.transport === "rest" ? "rest" : "mcp",
+		hygieneThreshold: Math.min(
+			1,
+			Math.max(0.5, Number(raw.hygieneThreshold) || DEFAULTS.hygieneThreshold),
+		),
+		hygieneMaxFacts: int(raw.hygieneMaxFacts, DEFAULTS.hygieneMaxFacts, 20, 2_000),
+		hygieneProjectMission: str(raw.hygieneProjectMission, DEFAULTS.hygieneProjectMission),
+		hygieneProjectMaxObservations: int(
+			raw.hygieneProjectMaxObservations,
+			DEFAULTS.hygieneProjectMaxObservations,
+			1,
+			500,
+		),
+		hygieneGlobalMission: str(raw.hygieneGlobalMission, DEFAULTS.hygieneGlobalMission),
+		hygieneGlobalMaxObservations: int(
+			raw.hygieneGlobalMaxObservations,
+			DEFAULTS.hygieneGlobalMaxObservations,
+			1,
+			500,
+		),
 	};
 }

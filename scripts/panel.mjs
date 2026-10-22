@@ -113,6 +113,27 @@ async function main() {
 		`其它项目层          ${foreignFacts.length} 条   ← 本项目召回时会被过滤掉`,
 		`合计               ${facts.length} 条`,
 	]));
+
+	// ── 记忆卫生：近重复 + observation scope（都在共享 bank 上，两端同时受益）
+	const { findDuplicateGroups, planPrune } = await import("../src/hygiene.js");
+	const active = facts.filter((fact) => (fact?.state ?? "valid") === "valid");
+	const { groups } = findDuplicateGroups(active, { threshold: 0.8, maxFacts: LIMIT });
+	const plan = planPrune(groups);
+	const scopes = await getJson(
+		`/v1/default/banks/${encodeURIComponent(BANK)}/observations/scopes`,
+	).catch(() => null);
+	const scopeText = Array.isArray(scopes?.scopes)
+		? scopes.scopes
+				.map((s) => `${(s.tags ?? []).join(",") || "(全局层)"} ${s.count} 条`)
+				.join("   ")
+		: "（读取失败）";
+	console.log("");
+	console.log(box("记忆卫生（共享 bank 层 · 两端同时受益）", [
+		`近重复组（阈值0.8）  ${groups.length} 个 → 待作废 ${plan.invalidate.length} 条`,
+		`observation scope   ${scopeText}`,
+		`服务端自动整理      consolidation_strategies（项目层）+ max_observations_per_scope（全局层）`,
+		`手动整理            node scripts/hygiene.mjs --threshold 0.8 --apply   ← 可逆：state 改回 valid 即恢复`,
+	]));
 	console.log("");
 	console.log(box("最近 8 条事实", facts.slice(0, 8).map((fact) => {
 		const tags = Array.isArray(fact.tags) && fact.tags.length ? fact.tags.join(",") : "(无标签=全局层)";

@@ -23,6 +23,7 @@ import { resolveProjectLabel } from "./label.js";
 import { HindsightMemoryClient } from "./client.js";
 import { SCOPE, TIER } from "./parity.js";
 import { normalizeScope, sanitizeMemoryText, sanitizeTags } from "./sanitize.js";
+import { findDuplicateGroups, planPrune, summarizeGroups } from "./hygiene.js";
 import {
 	MEMORY_PROTOCOL,
 	buildPromptSection,
@@ -51,6 +52,53 @@ function toolError(message) {
 
 function toolJson(value) {
 	return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+/**
+ * 按层统计事实数量。
+ * @param {Array} facts 事实列表。
+ * @param {string} projectLabel 本项目标签（小写）。
+ */
+function countLayers(facts, projectLabel) {
+	const projectTag = `project:${projectLabel}`;
+	let global = 0;
+	let project = 0;
+	let other = 0;
+	for (const fact of facts ?? []) {
+		const tags = Array.isArray(fact?.tags) ? fact.tags : [];
+		if (tags.length === 0) global += 1;
+		else if (tags.includes(projectTag)) project += 1;
+		else other += 1;
+	}
+	return { global, project, other, total: (facts ?? []).length };
+}
+
+/** 分层统计（失败不抛——状态查询不该因为多一次调用就失败）。 */
+async function layerCounts(channel, signal) {
+	try {
+		const raw = await channel.client.listFacts({ limit: 500, signal });
+		const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
+		const active = facts.filter((f) => (f?.state ?? "valid") === "valid");
+		return countLayers(active, channel.label);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * 候选 consolidation 策略。
+ * 项目层用通配 scope 命中；**全局层（无标签 scope）无法被任何规则命中**——
+ * 服务端的匹配语义是「scope 含全部规则标签」，空标签 scope 谁都匹配不上，
+ * 所以全局层只能靠 bank 级默认值兜住。
+ */
+function candidateStrategies(config) {
+	return [
+		{
+			scopes: [{ tags: ["project:*"], tags_match: "all" }],
+			observations_mission: config.hygieneProjectMission,
+			max_observations_per_scope: config.hygieneProjectMaxObservations,
+		},
+	];
 }
 
 /**
@@ -284,17 +332,141 @@ export async function apply(ctx, rawConfig = {}) {
 				try {
 					const channel = await requireChannel(exec);
 					const status = await channel.client.status({ signal: exec?.signal });
+					const layers = await layerCounts(channel, exec?.signal);
 					return toolJson({
 						...status,
 						projectLabel: channel.label,
 						workingDirectory: channel.dir,
 						scoping: config.scoping,
 						writeEnabled: config.writeEnabled,
+						layers,
 					});
 				} catch (error) {
 					return toolError(`状态查询失败：${error?.message ?? error}`);
 				}
 			},
+		},
+		{
+			name: "memory_hygiene",
+			description:
+				"整理共享记忆库（DSH 与 omp 同一个 bank，改一处两端同时见效）。action=preview 只读地列出近重复事实与各层分布；action=prune 作废近重复事实（每组保留最新一条，服务端可逆：state 可改回 valid）；action=consolidate 触发服务端合并 observation；action=scopes 查看各层 observation 数量；action=strategies-preview 预览分层口径的命中情况。",
+			parameters: {
+				type: "object",
+				properties: {
+					action: {
+						type: "string",
+						enum: ["preview", "prune", "consolidate", "scopes", "strategies-preview"],
+						description: "要执行的整理动作，默认 preview（只读）。",
+					},
+					dryRun: {
+						type: "boolean",
+						description: "prune 时是否只报告不落手，默认 true。",
+					},
+					threshold: {
+						type: "number",
+						description: "近重复相似度阈值（0.5-1），默认取插件配置。",
+					},
+					limit: {
+						type: "number",
+						description: "扫描的事实条数上限，默认取插件配置。",
+					},
+				},
+				required: [],
+			},
+			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
+			execute: async (args, exec) => {
+				try {
+					const channel = await requireChannel(exec);
+					const action = String(args?.action ?? "preview");
+					const client = channel.client;
+
+					if (action === "consolidate") {
+						const result = await client.consolidate({ signal: exec?.signal });
+						return toolJson({ ok: true, action, bankId: client.bankId, result });
+					}
+					if (action === "scopes") {
+						const scopes = await client.observationScopes({ signal: exec?.signal });
+						return toolJson({ ok: true, action, bankId: client.bankId, scopes });
+					}
+					if (action === "strategies-preview") {
+						const preview = await client.previewStrategies(candidateStrategies(config), {
+							signal: exec?.signal,
+						});
+						return toolJson({ ok: true, action, bankId: client.bankId, preview });
+					}
+
+					const threshold = Number.isFinite(Number(args?.threshold))
+						? Math.min(1, Math.max(0.5, Number(args.threshold)))
+						: config.hygieneThreshold;
+					const limit = Number.isFinite(Number(args?.limit))
+						? Math.min(2_000, Math.max(20, Math.trunc(Number(args.limit))))
+						: config.hygieneMaxFacts;
+
+					const raw = await client.listFacts({ limit, signal: exec?.signal });
+					const facts = Array.isArray(raw) ? raw : (raw?.items ?? raw?.memories ?? []);
+					const active = facts.filter((f) => (f?.state ?? "valid") === "valid");
+					const { groups, crossScope, scanned } = findDuplicateGroups(active, {
+						threshold,
+						maxFacts: limit,
+					});
+					const plan = planPrune(groups);
+					const layers = countLayers(active, channel.label);
+
+					if (action === "prune") {
+						const dryRun = args?.dryRun !== false;
+						const results = [];
+						for (const fact of plan.invalidate) {
+							if (dryRun) {
+								results.push({ id: fact?.id, state: "would-invalidate" });
+								continue;
+							}
+							try {
+								await client.setFactState(fact?.id, "invalidated", {
+									signal: exec?.signal,
+								});
+								results.push({ id: fact?.id, state: "invalidated" });
+							} catch (error) {
+								results.push({ id: fact?.id, state: "failed", error: error?.message });
+							}
+						}
+						return toolJson({
+							ok: true,
+							action,
+							dryRun,
+							bankId: client.bankId,
+							scanned,
+							threshold,
+							layers,
+							duplicateGroups: groups.length,
+							duplicateFacts: plan.invalidate.length,
+							crossScopeSameText: crossScope.length,
+							results,
+						});
+					}
+
+					return toolJson({
+						ok: true,
+						action: "preview",
+						bankId: client.bankId,
+						scanned,
+						threshold,
+						layers,
+						duplicateGroups: summarizeGroups(groups),
+						duplicateGroupCount: groups.length,
+						duplicateFactCount: plan.invalidate.length,
+						crossScopeSameText: crossScope.length,
+					});
+				} catch (error) {
+					log(`memory_hygiene failed: ${error?.message ?? error}`);
+					return toolError(`整理失败：${error?.message ?? error}`);
+				}
+			},
+			presentCall: (args) => ({
+				card: "generic",
+				title: "整理长期记忆",
+				kind: "search",
+				description: String(args?.action ?? "preview"),
+			}),
 		},
 	];
 

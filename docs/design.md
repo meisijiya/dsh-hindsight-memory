@@ -618,3 +618,61 @@ omp 侧日志还印证了标签自动盖章：`Hindsight: seeded mental model ..
 node scripts/isolation-check.mjs --a "D:/26code/随便问问" --b "D:/26code/测试hindsight"
 node scripts/panel.mjs --dir "D:/26code/随便问问"
 ```
+
+---
+
+## 22. 记忆卫生（2026-10-22，用户诉求：omp 没有自动清理？能不能推下一轮）
+
+### 22.1 问题
+
+用户在本会话看到的召回块里，「双层标签」类事实**同时出现 4 条近义重复**，并问：
+「omp 没有自动清理吗？可以推下一轮。总之，DSH 和 omp 两侧读写一致，避免记忆行为分裂。」
+
+### 22.2 取证：清理能力属于谁
+
+| 组件 | 有没有清理能力 | 证据 |
+|---|---|---|
+| **omp** | ❌ 没有 | 对 `omp.exe` 做字符串取证：只有 `retain/recall/reflect` 与 bank/mental-model 相关逻辑，**无任何去重/清理/合并逻辑**；Hindsight API 侧也没有 world 事实去重端点 |
+| **Hindsight 服务端** | ⚠️ 只有一半 | `POST /v1/default/banks/{bank}/consolidate` 会合并 observation（实测返回 `{"deduplicated": true}`），并按 `max_observations_per_scope` 裁剪 observation；**但 world 原始事实不去重** |
+| **bank 级配置** | ✅ 有（服务端自动） | `consolidation_strategies`（按 scope 命中，含 observations_mission + 上限）、bank 级 `observations_mission` / `max_observations_per_scope` / `enable_auto_consolidation` |
+| **dsh-mnemon** | ❌ 没有 | provider 0.5.6 无清理接口 |
+
+### 22.3 结论与分层归属
+
+**清理必须落在共享 bank 层**——因为 DSH 与 omp 读写同一个 bank：
+整理在 bank 上做 ⇒ 两端同时受益；放在某一侧做 ⇒ 行为立刻分裂（用户明确不接受）。
+
+于是分成两层，各管一段：
+
+| 层 | 归属 | 机制 | 本轮状态 |
+|---|---|---|---|
+| L1 服务端自动 | Hindsight 本体（bank 配置） | 项目层 scope 用 `consolidation_strategies`（口径 + 上限 40）；全局层用 bank 级 `observations_mission` + `max_observations_per_scope=30`；`enable_auto_consolidation=true` | ✅ 已对 `shared` 库 PATCH 生效 |
+| L2 客户端整理 | 本插件 `memory_hygiene` + `scripts/hygiene.mjs` | world 原始事实近重复清理（服务端无此能力） | ✅ 工具与脚本已就绪并实跑 |
+
+### 22.4 去重规则的三条护栏
+
+1. **同层才比**：分组签名 = `fact_type + 标签集`。项目层与全局层语义不同，同文也不同义。
+2. **不动 observation**：服务端每次 retain 同时产出 world 原文与 observation 归纳，文本高度相似但语义不同；
+   默认跳过 observation（`includeObservations=false`），只有显式要求才纳入。
+3. **每组留最新 + 可逆**：保留 `updated_at` 最新的一条，其余 `PATCH state=invalidated`；
+   服务端明确 `invalidated ⇄ valid` 可逆（`UpdateMemoryRequest.state` 描述：*"or 'valid' to revert. Reversible."*）。
+
+相似度算法：中文按字符二元组 + 拉丁按词切分，取 Jaccard；阈值 `0.9` 逐字级、`0.8` 能抓换说法级。
+
+### 22.5 实测结果（2026-10-22）
+
+| 步骤 | 结果 |
+|---|---|
+| 清理前 | 93 条活跃事实；召回块里 4 条近义重复 |
+| `--threshold 0.8 --apply` | 作废 6 条（0 失败）；作废后重复组 0 |
+| `POST /consolidate` | `{"operation_id":"f0720773-…","deduplicated":true}`；活跃 81 → 88（服务端重建 observation） |
+| 清理后召回 | `recall(project:随便问问)` 命中 14 条，**近重复组 0** |
+| 分层回归 | `node scripts/verify-live.mjs` **8/8 通过**（含「别项目标签硬隔离负例 count=0」） |
+| 单测 | `node --test "test/*.test.js"` **28/28 通过**（新增 10 条 hygiene 用例） |
+
+### 22.6 已知限制
+
+- world 事实去重只能靠客户端（服务端无端点）⇒ 需要定期跑脚本/工具，不是自动发生的。
+- 全局层（无标签 scope）**无法被任何 `consolidation_strategies` 规则命中**（匹配语义是「scope 含全部规则标签」，
+  空标签 scope 谁都匹配不上），只能靠 bank 级 `observations_mission` + `max_observations_per_scope` 兜住。
+- `memory_defense`（bank 配置里存在该键）在本镜像里只是配置透传，没有可用实现，不作为方案依赖。

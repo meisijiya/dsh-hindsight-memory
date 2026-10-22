@@ -26,7 +26,7 @@
             omp
 ```
 
-## 四个工具
+## 五个工具
 
 | 工具 | 作用 | 与 omp 的对应 |
 |------|------|----------------|
@@ -34,6 +34,7 @@
 | `memory_retain(content, tier?)` | 写入耐久事实。`tier=project`（默认）只有本项目可见；`tier=global` 所有项目可见 | omp 的 `retain` |
 | `memory_reflect(query, scope?)` | 让记忆服务综合回答（不是返回原始条目） | omp 的 `reflect` |
 | `memory_status()` | 连通性、当前记忆库、项目标签、各层条数 | omp 无（诊断用） |
+| `memory_hygiene(action?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中 | omp 无（见「记忆卫生」一节） |
 
 **标签是插件的事，不是模型的事**：模型不传 `tags`，插件按 `basename(主 checkout 根).toLowerCase()` 盖章——与 omp 的 `projectLabel()` 逐字同规则。
 
@@ -121,6 +122,12 @@ dsh plugin --profile web add "file:D:/path/to/dsh-hindsight-memory"
         autoRetain: true        # 回合结束自动留存（与 omp 的 autoRetain 默认值一致）
         retainEveryNTurns: 3
         sectionOrder: 950
+        hygieneThreshold: 0.9        # 近重复判定阈值（越高越保守）
+        hygieneMaxFacts: 500          # 单次扫描的事实条数上限
+        hygieneProjectMission: '只保留该项目中长期有效的技术决策、约定、硬约束与踩过的坑；不保留一次性进度、临时状态与重复表述。'
+        hygieneProjectMaxObservations: 40   # 项目层每个 scope 的 observation 上限
+        hygieneGlobalMission: '只保留跨项目长期有效的约定、环境事实与用户偏好；不保留一次性进度、临时状态与重复表述。'
+        hygieneGlobalMaxObservations: 30   # 全局层 observation 上限
 ```
 
 **配置写错不会炸 profile**：所有非法输入一律回落到默认值（`normalizeConfig` 不抛错）。
@@ -174,12 +181,50 @@ node scripts/isolation-check.mjs --a "D:/26code/随便问问" --b "D:/26code/测
 > 结论：**项目隔离靠标签，不靠库名**；同一块 `shared` 库里，靠 `project:<仓库名小写>` 区分项目层、
 > 靠「无 tag」区分全局层。DSH 与 omp 读写同一批数据、各自只看自己该看的那一层。
 
+## 记忆卫生（共享 bank 层，两端同时受益）
+
+**omp 自己没有清理能力**（实测：omp 二进制里没有任何去重/整理逻辑，只有 retain/recall/reflect）。
+所以「记忆越写越胖、召回里出现四五条近义重复」这件事，**必须由中间层在共享 bank 上做**——
+只有这样 omp 与 DSH 才不会行为分裂（整理一处，两端同时受益；整理在某一侧做 ⇒ 立刻分裂）。
+
+分两层，各管一段：
+
+| 层 | 谁在做 | 管什么 | 状态 |
+|---|---|---|---|
+| **服务端自动** | Hindsight 本体（bank 级配置） | observation 归纳层的口径与上限：项目层 scope 用 `consolidation_strategies`（口径 + 上限 40），全局层用 bank 级 `observations_mission` + `max_observations_per_scope=30`；`enable_auto_consolidation=true` | 已在本机 `shared` 库启用 |
+| **客户端整理** | 本插件 `memory_hygiene` 工具 + `scripts/hygiene.mjs` | world 原始事实的**近重复清理**（服务端不提供 world 去重） | 工具与脚本已就绪，可预览/执行 |
+
+```bash
+# 只读预览（默认）
+node scripts/hygiene.mjs --bank shared --threshold 0.8
+
+# 真正作废近重复事实（服务端可逆：state 改回 valid 即恢复）
+node scripts/hygiene.mjs --threshold 0.8 --apply
+
+# 顺带触发服务端合并 observation
+node scripts/hygiene.mjs --consolidate
+```
+
+工具版：`memory_hygiene(action=preview|prune|consolidate|scopes|strategies-preview)`，`prune` 默认 `dryRun=true`。
+
+**去重规则（三条护栏，缺一条就会误伤）**
+
+1. **只在同一层内找重复**：项目层与全局层语义不同，同文也不同义 ⇒ 分组签名 = `fact_type + 标签集`。
+2. **不动 observation**：服务端每次 retain 会同时产出 world 原始事实与 observation 归纳事实，两者文本高度相似但语义不同；把归纳层当重复删掉＝删掉归纳成果（默认跳过，`--include-observations` 才纳入）。
+3. **每组保留最新的一条**，其余作废；作废是**可逆**的（`PATCH /memories/{id} {"state":"invalidated"}` → `{"state":"valid"}` 即可恢复）。
+
+**2026-10-22 实测**：93 条活跃事实 → 清理 6 条近重复 → 触发 consolidation（服务端返回 `deduplicated: true`）→ 88 条活跃；
+召回命中 14 条、近重复组 **0**；`node scripts/verify-live.mjs` **8/8 通过**（分层可见性、跨项目硬隔离负例 count=0 全部复验）。
+
+> 阈值怎么选：`0.9` 只抓逐字重复；`0.8` 能抓「同一件事换个说法」（本机这轮的真实情况）；`0.7` 起要人工看一眼再下手。
+
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 18 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 28 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
+node scripts/hygiene.mjs        # 记忆卫生（默认只读预览；--apply 才作废，--consolidate 顺带合并）
 node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录>   # 两项目隔离可见性矩阵
 ```
 

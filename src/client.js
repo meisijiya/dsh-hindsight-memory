@@ -231,7 +231,74 @@ export class HindsightMemoryClient {
 		return out;
 	}
 
+	// ─────────────────── 记忆卫生（只作用于共享 bank）───────────────────
+	// 这些接口 MCP 工具面里没有（服务端已收窄到 7 个安全工具），
+	// 所以卫生动作走 REST——而且**必须**走 REST：只有 bank 级操作才能让
+	// omp 与 DSH 同时受益（两端读的是同一个 bank）。
+
+	/** 列出 bank 内的事实。 */
+	async listFacts({ limit = 500, signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/list?limit=${encodeURIComponent(String(limit))}`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 作废或恢复一条事实（state: invalidated ⇄ valid，服务端保证可逆）。 */
+	async setFactState(id, state, { signal } = {}) {
+		return this.patchJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/${encodeSegment(id)}`,
+			{ state },
+			{ signal, timeoutMs: this.config.retainTimeoutMs },
+		);
+	}
+
+	/** 触发 bank 级 consolidation（observation 合并）。 */
+	async consolidate({ signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/consolidate`,
+			{},
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** observation scope 统计（每个 scope 的 observation 条数）。 */
+	async observationScopes({ signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/observations/scopes`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
+	/** 预览 consolidation 策略命中了哪些 scope。 */
+	async previewStrategies(strategies, { signal } = {}) {
+		return this.postJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/consolidation-strategies/preview`,
+			{ strategies, sample_limit: 10 },
+			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+		);
+	}
+
+	/** 读 bank 配置（consolidation 策略与口径都在这里）。 */
+	async bankConfig({ signal } = {}) {
+		return this.getJson(
+			`/v1/default/banks/${encodeSegment(this.bankId)}/config`,
+			{ signal, timeoutMs: this.config.recallTimeoutMs },
+		);
+	}
+
 	// ────────────────────────── HTTP 工具 ──────────────────────────
+
+	async patchJson(path, body, { signal, timeoutMs } = {}) {
+		const response = await this.fetchWithTimeout(path, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal,
+			timeoutMs,
+		});
+		return this.parse(response);
+	}
 
 	async postJson(path, body, { signal, timeoutMs } = {}) {
 		const response = await this.fetchWithTimeout(path, {

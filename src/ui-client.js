@@ -207,9 +207,41 @@ window.__ModuleLoader__.load({
 				default: 120000,
 				doc: "对应 omp 的 reflectTimeoutMs。",
 			},
+			{
+				group: "记忆卫生",
+				key: "hygieneThreshold",
+				label: "近重复阈值（0-1）",
+				type: "number",
+				default: 0.9,
+				doc: "越高越保守。0.9 只抓逐字重复，0.8 能抓「同一件事换个说法」。",
+			},
+			{
+				group: "记忆卫生",
+				key: "hygieneMaxFacts",
+				label: "单次扫描条数上限",
+				type: "number",
+				default: 500,
+				doc: "防 O(n²) 爆掉；超过这个规模建议先按类型分批。",
+			},
+			{
+				group: "记忆卫生",
+				key: "hygieneProjectMaxObservations",
+				label: "项目层 observation 上限",
+				type: "number",
+				default: 40,
+				doc: "写入 bank 的 consolidation_strategies（项目层 scope）。",
+			},
+			{
+				group: "记忆卫生",
+				key: "hygieneGlobalMaxObservations",
+				label: "全局层 observation 上限",
+				type: "number",
+				default: 30,
+				doc: "bank 级 max_observations_per_scope（无标签 scope 只能走 bank 默认）。",
+			},
 		];
 
-		const GROUPS = ["连接", "行为", "隔离", "召回", "进阶"];
+		const GROUPS = ["连接", "行为", "隔离", "召回", "记忆卫生", "进阶"];
 
 		const STYLE = {
 			wrap: {
