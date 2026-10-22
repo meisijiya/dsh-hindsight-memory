@@ -80,6 +80,7 @@
 | 面板 | 位置 | 能看/能改什么 |
 |---|---|---|
 | **插件管理（配置）** | DSH → 插件 → `dsh-hindsight-memory` → 详情页 →「配置」（插件自带的 client 半体渲染） | 逐项查看并修改插件配置（服务地址、记忆库、作用域、预算、只读/读写、自动召回/留存…）。配置写错**不会炸 profile**——非法输入一律回落到默认值 |
+| **插件管理（记忆看板）** | DSH → 插件 → `dsh-hindsight-memory` → 详情页 →「记忆看板」（v0.7.0 新增） | **只读**快照：记忆库条数与告警、全局层/项目层/其它项目层分层、事实类型分布、近重复组、体检计数（陈旧/孤儿 observation/被取代/空知识页/卡住任务）、任务状态分布、精神模型与知识页清单。可手动刷新 |
 | **终端状态面板** | `node scripts/panel.mjs` | 服务健康、记忆库清单、**分层条数**（全局层 / 本项目层 / 其它项目层）、最近事实与其标签；项目标签按 omp 同规则自动推导，也可用 `--project <名字>` 覆盖 |
 | **官方前端（最详细）** | <http://127.0.0.1:9999> | Hindsight Control Plane：知识页、实体、关系图、原始事实、库管理 |
 
@@ -392,6 +393,7 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.0 | **插件详情页记忆看板（只读）**：服务端在宿主 `connection.rpc` 通道上注册 `/dsh-hindsight-memory`（7 个只读端点：overview/layers/audit/operations/models/pages/config），client 半体注册 `plugins.detail.section` 席位渲染看板。取数走服务端代理（Hindsight 无 CORS，浏览器不能直连）。**看板只读**：写操作仍必须走记忆工具的 confirm+reason 护栏 |
 | 0.1.0 | 首个可运行版本：四个封装工具 + omp 契约对齐（盖章/过滤/预算/异步语义） |
 | 0.2.0 | 记忆卫生层：`memory_hygiene` 工具 + `src/hygiene.js` + bank 级 consolidation 配置 + 终端面板卫生板块 |
 | 0.3.0 | 把插件行投影成宿主可编辑配置项：`LiveConfig`（全部字段 `.volatile()`）+ `unwrapConfig` + `loader/volatile-update` 热更新 |

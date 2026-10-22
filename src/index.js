@@ -61,6 +61,8 @@ import {
 	renderRecallMessage,
 	renderMentalModelMessage,
 } from "./prompt.js";
+import { PANEL_RPC_CHANNEL } from "./panel.js";
+import { createPanelRpcHandler } from "./panel-rpc.js";
 
 export const name = "hindsight-memory";
 
@@ -356,6 +358,40 @@ export async function apply(ctx, rawConfig = {}) {
 			log(`config update failed: ${error?.message ?? error}`);
 		}
 	});
+
+	// ── 2.6) 记忆看板的宿主 RPC 通道（插件详情页只读看板）─────────────────
+	//
+	// 🔴 为什么走 connection.rpc 而不是自己开 HTTP 路由：
+	//    宿主 connection 服务自带 Host/Origin 栅栏与会话 cookie 鉴权，
+	//    浏览器同源调用即可；而 Hindsight 本身没有 CORS，浏览器不能直连。
+	//    通道注册放在 ctx.inject(["connection"], …) 里 ⇒ connection 服务缺席时
+	//    只是不注册看板，**不会**让插件整体装载失败。
+	//    ctx.inject 不存在时（headless / 测试桩）直接跳过看板。
+	if (typeof ctx.inject !== "function") {
+		log("ctx.inject unavailable; panel RPC skipped");
+	} else {
+		ctx.inject(["connection"], (scope) => {
+			try {
+				// scope.get 是声明了 inject 后的正规取法；取不到再回落 root 上的属性。
+				const connection = scope.get?.("connection") ?? scope.root?.connection;
+				if (!connection) return;
+				/** 取当前项目标签：优先用最近活跃会话的标签，否则按进程 cwd 推导。 */
+				const resolveLabel = () => {
+					for (const channel of channels.values()) {
+						if (channel.label) return channel.label;
+					}
+					return config.projectLabelOverride || "";
+				};
+				const dispose = connection.rpc.handle(
+					PANEL_RPC_CHANNEL,
+					createPanelRpcHandler({ config, log, resolveLabel }),
+				);
+				scope.effect(() => dispose, "hindsight-memory panel RPC");
+			} catch (error) {
+				log(`panel RPC registration failed: ${error?.message ?? error}`);
+			}
+		});
+	}
 
 	// ── 3) 工具（一次注册，模型可见面恒定）──────────────────────────────
 	const requireChannel = async (exec) => {

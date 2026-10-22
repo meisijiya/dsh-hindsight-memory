@@ -5,6 +5,16 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.7.0 — 插件详情页记忆看板（只读）
+
+- 新增：插件详情页多一个「记忆看板」区块，直接看当前记忆库状态——记忆库条数与告警、全局层/项目层/其它项目层分层与事实类型分布、近重复组、体检计数（陈旧/孤儿 observation/被取代/空知识页/卡住任务）、任务状态分布、精神模型与知识页清单（陈旧的会标出来），可手动刷新。
+- 取数路径：服务端在宿主的 `connection.rpc` 通道上注册 `/dsh-hindsight-memory`（7 个**只读**端点：overview/layers/audit/operations/models/pages/config），client 半体注册 `plugins.detail.section` 席位并通过 `ctx.get("connection").rpc.call(...)` 取数。**为什么不让浏览器直连 Hindsight**：服务端没有 CORS 中间件（OPTIONS 预检直接 405），只能由服务端代理；宿主的 RPC 通道自带 Host/Origin 栅栏与会话 cookie 鉴权。
+- **看板是只读的**：所有写操作仍必须走记忆工具（`memory_hygiene` / `memory_pages` / `memory_mental_models` 的 confirm+reason 护栏），页面不提供任何绕过护栏的写入口。端点清单里出现写动作时，单测直接失败。
+- 新增文件：`src/panel.js`（纯函数快照组装 + 公开配置白名单）、`src/panel-rpc.js`（RPC 端点实现）、`test/panel.test.js`（契约测试）。
+- 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增。
+- 依赖：`dsh.client.inject` 增加 `@deepseek-ai/dsh-client-connection`（宿主自带，缺失时看板不可用但插件照常工作）。
+- ⚠️ 需要**重启一次 DSH Web** 才能看到看板：宿主在启动时解析并缓存每个包的 `package.json` 与 client 半体。
+
 ## 0.6.5 — 修 observation 提示在活体里失效（分页信封当数组用）
 
 - 现象（活体复现）：`memory_hygiene action=correct` 打派生 observation 时，报的不是可操作提示，而是 `整理失败：(facts ?? []) is not iterable`。

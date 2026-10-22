@@ -681,14 +681,215 @@ window.__ModuleLoader__.load({
 			]);
 		}
 
-		/** client 侧需要的服务：slots（注册渲染槽位）。 */
-		const inject = ["slots"];
+		/** client 侧需要的服务：slots（注册渲染槽位）、connection（取数通道）。 */
+		const inject = ["slots", "connection"];
+
+		/** 看板的宿主 RPC 通道（与服务端 src/panel.js 的常量一致）。 */
+		const PANEL_RPC_CHANNEL = "/dsh-hindsight-memory";
 
 		/**
-		 * 注册插件行配置页。
+		 * 记忆看板（只读）。
+		 *
+		 * 🔴 为什么只读：任何写操作都必须走记忆工具（带 confirm + reason 护栏），
+		 *    页面直接写就等于绕过了护栏。页面只负责「看清楚现在是什么状态」。
+		 *
+		 * @param {any} props 宿主给的 owner props：subject。
+		 * @param {any} connection 宿主 connection 服务（RPC 取数）。
+		 */
+		function HindsightMemoryPanel(props, getConnection) {
+			const subject = props?.subject;
+			const pkgName = subject?.pkg?.name ?? "";
+			const kind = subject?.kind ?? "";
+			const relevant = (kind === "bundle" || kind === "row") && pkgName === "dsh-hindsight-memory";
+
+			const [snapshot, setSnapshot] = useState(null);
+			const [error, setError] = useState(null);
+			const [loading, setLoading] = useState(false);
+
+			const load = useCallback(async () => {
+				const connection = getConnection?.();
+				if (!connection) {
+					setError("宿主没有提供 connection 服务，看板不可用");
+					return;
+				}
+				setLoading(true);
+				try {
+					const result = await connection.rpc.call(
+						PANEL_RPC_CHANNEL,
+						"overview",
+						{},
+						AbortSignal.timeout(30000),
+					);
+					if (result?.ok) {
+						setSnapshot(result.value ?? null);
+						setError(null);
+					} else {
+						setError(result?.error?.message ?? "看板取数失败");
+					}
+				} catch (err) {
+					setError(err?.message ?? String(err));
+				} finally {
+					setLoading(false);
+				}
+			}, [getConnection]);
+
+			useEffect(() => {
+				if (!relevant) return;
+				load();
+			}, [relevant, load]);
+
+			// 无关的插件/行不渲染任何东西（席位契约要求返回 null）。
+			if (!relevant) return null;
+
+			const layers = snapshot?.layers ?? {};
+			const counts = snapshot?.audit?.counts ?? {};
+			const bank = snapshot?.bank ?? null;
+			const operations = snapshot?.operations ?? null;
+			const models = Array.isArray(snapshot?.models) ? snapshot.models : [];
+			const pages = Array.isArray(snapshot?.pages) ? snapshot.pages : [];
+
+			const layerRow = (name, layer) =>
+				h("div", { key: name, style: STYLE.row }, [
+					h("span", { style: STYLE.label }, [
+						name,
+						h("span", { style: STYLE.tag }, `${layer?.count ?? 0} 条`),
+						...(layer?.byType
+							? Object.entries(layer.byType).map(([type, n]) =>
+									h("span", { key: `${name}-${type}`, style: STYLE.tag }, `${type} ${n}`),
+								)
+							: []),
+					]),
+				]);
+
+			return h("div", { style: STYLE.wrap }, [
+				h("p", { style: STYLE.note }, [
+					"记忆看板（只读）：下面是 Hindsight 记忆库当前的状态快照。",
+					h("br", null),
+					"改配置请编辑 profile 的 cordis.patch.yml（改完需重启 DSH）；想看记忆正文打开 ",
+					h(
+						"a",
+						{ href: "http://127.0.0.1:9999", target: "_blank", rel: "noreferrer" },
+						"http://127.0.0.1:9999",
+					),
+					"。",
+				]),
+				h("div", { style: STYLE.actions }, [
+					h(
+						"button",
+						{ type: "button", style: STYLE.btn, disabled: loading, onClick: load },
+						loading ? "刷新中……" : "刷新",
+					),
+					snapshot?.generatedAt
+						? h("span", { style: STYLE.status }, `快照时间 ${snapshot.generatedAt}`)
+						: null,
+				]),
+				error ? h("p", { style: STYLE.status }, `看板不可用：${error}`) : null,
+				!snapshot && !error ? h("p", { style: STYLE.status }, "加载中……") : null,
+				snapshot
+					? h("section", { style: STYLE.group }, [
+							h("h4", { style: STYLE.groupTitle }, "记忆库"),
+							h("div", { style: STYLE.row }, [
+								h("span", { style: STYLE.label }, [
+									bank?.bankId ?? "—",
+									h("span", { style: STYLE.tag }, `${bank?.factCount ?? 0} 条事实`),
+									h("span", { style: STYLE.tag }, `${bank?.documentCount ?? 0} 份文档`),
+									h("span", { style: STYLE.tag }, `${bank?.totalBanks ?? 0} 个记忆库`),
+									snapshot?.projectLabel
+										? h("span", { style: STYLE.tag }, `项目 ${snapshot.projectLabel}`)
+										: null,
+								]),
+								...(bank?.warnings ?? []).map((warning, index) =>
+									h("p", { key: `warn-${index}`, style: STYLE.doc }, String(warning)),
+								),
+							]),
+						])
+					: null,
+				snapshot
+					? h("section", { style: STYLE.group }, [
+							h("h4", { style: STYLE.groupTitle }, "分层"),
+							layerRow("全局层（无标签）", layers.global),
+							layerRow("项目层（project 标签）", layers.project),
+							layerRow("其它项目层", layers.other),
+							h("p", { style: STYLE.doc }, `合计 ${layers.total ?? 0} 条`),
+						])
+					: null,
+				snapshot
+					? h("section", { style: STYLE.group }, [
+							h("h4", { style: STYLE.groupTitle }, "体检"),
+							h("div", { style: STYLE.row }, [
+								h("span", { style: STYLE.label }, [
+									h("span", { style: STYLE.tag }, `近重复组 ${snapshot?.duplicates?.groups ?? 0}`),
+									h("span", { style: STYLE.tag }, `陈旧 ${counts.stale ?? 0}`),
+									h("span", { style: STYLE.tag }, `孤儿 observation ${counts.orphanObservations ?? 0}`),
+									h("span", { style: STYLE.tag }, `被取代 ${counts.superseded ?? 0}`),
+									h("span", { style: STYLE.tag }, `空知识页 ${counts.emptyPages ?? 0}`),
+									h("span", { style: STYLE.tag }, `卡住任务 ${counts.stuckOperations ?? 0}`),
+								]),
+								...(snapshot?.audit?.groups ?? []).map((group, index) =>
+									h(
+										"p",
+										{ key: `audit-${index}`, style: STYLE.doc },
+										`${group.kind}：${group.reason ?? ""}（${group.count}）`,
+									),
+								),
+							]),
+						])
+					: null,
+				snapshot
+					? h("section", { style: STYLE.group }, [
+							h("h4", { style: STYLE.groupTitle }, "任务与模型"),
+							h("div", { style: STYLE.row }, [
+								h("span", { style: STYLE.label }, [
+									h("span", { style: STYLE.tag }, `任务 ${operations?.total ?? 0}`),
+									...Object.entries(operations?.byStatus ?? {}).map(([status, n]) =>
+										h("span", { key: `op-${status}`, style: STYLE.tag }, `${status} ${n}`),
+									),
+								]),
+							]),
+							h("div", { style: STYLE.row }, [
+								h("span", { style: STYLE.label }, [
+									`精神模型 ${models.length}`,
+									...models.map((model) =>
+										h(
+											"span",
+											{ key: model.id ?? model.name, style: STYLE.tag },
+											`${model.name ?? model.id}${model.isStale ? "（陈旧）" : ""}`,
+										),
+									),
+								]),
+							]),
+							h("div", { style: STYLE.row }, [
+								h("span", { style: STYLE.label }, [
+									`知识页 ${pages.length}`,
+									...pages.map((page) =>
+										h(
+											"span",
+											{ key: page.id ?? page.name, style: STYLE.tag },
+											`${page.name ?? page.id}${page.isStale ? "（陈旧）" : ""}`,
+										),
+									),
+								]),
+							]),
+						])
+					: null,
+			]);
+		}
+
+		/**
+		 * 注册插件行配置页与记忆看板。
 		 * @param {any} ctx 浏览器端插件上下文。
 		 */
 		function apply(ctx) {
+			// 取宿主 connection 服务（用于 RPC 取数）。取不到就不注册看板。
+			// 🔴 为什么用 getter 而不是直接取值：connection 是**延迟注入**的服务，
+			//    apply 执行的那一刻可能还没就绪 ⇒ 取值要放到真正用的时候。
+			const getConnection = () => {
+				try {
+					return ctx.get?.("connection") ?? null;
+				} catch {
+					return null;
+				}
+			};
 			// 行级配置页：插件包名 # bundle 里声明的行 id。
 			ctx.slots.inject("plugins.row.config", () =>
 				ctx.slots.register(
@@ -709,6 +910,18 @@ window.__ModuleLoader__.load({
 						inject: () => ({}),
 					},
 					HindsightMemoryConfig,
+				),
+			);
+			// 记忆看板：渲染在插件详情页正文下方（bundle 页与行页都会渲染）。
+			ctx.slots.inject("plugins.detail.section", () =>
+				ctx.slots.register(
+					{
+						name: "plugins.detail.section",
+						id: "dsh-hindsight-memory-health",
+						order: 60,
+						label: "记忆看板",
+					},
+					(props) => HindsightMemoryPanel(props, getConnection),
 				),
 			);
 		}

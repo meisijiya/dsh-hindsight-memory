@@ -1061,3 +1061,50 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 
 ### 30.4 运维提醒
 即便有自愈，**服务端重启后插件旧代码仍会抖一次**（失败-重连），直到 DSH 进程加载新代码 ⇒ 发布本修复后需要**重启一次 DSH**；此后容器再重建就无需人工干预。
+
+## 31. v0.7.0：插件详情页记忆看板（只读）
+
+### 31.1 目标与边界
+用户诉求是「插件要有一些用户可视的面板，可以参考记忆系统的可视化设计，或者在插件管理里查看/人工更改一些配置」。拆成两半：
+
+| 诉求 | 结论 | 依据 |
+|---|---|---|
+| 在插件详情页看到记忆状态 | **做**（v0.7.0 交付） | 宿主有 `plugins.detail.section` 列表席位，渲染点在详情页正文之后 |
+| 在页面上人工改配置 | **做不了**（宿主构建限制，与插件无关） | 本机 web profile 的 `dsh.profile.bundles` 共 37 项，**无** `@deepseek-ai/dsh-settings`、**无** `dsh-config-editor` ⇒ `GET /api/settings/describe` 返回 404，`props.form` 永远 `undefined` |
+
+于是 v0.7.0 的定位是**只读健康看板**：页面负责「看清楚现在是什么状态」，写操作一律仍走记忆工具的 confirm + reason 护栏。
+
+### 31.2 取数通道：为什么是宿主 RPC 而不是自建 HTTP 路由
+三条路都查过：
+
+1. **自建 webServer 前缀路由**（`ctx.webServer.register({kind:'prefix',...})`）：需要自己复刻鉴权（`connection.requestRejection(req)`，且**必须以方法形式调用**否则丢 `this` 导致全 403），且 headless / 无 Web 载体时路由不挂载。
+2. **裸 fetch 直连 Hindsight**：**不可行** —— 服务端没有 CORS 中间件（容器内 `grep -i cors` 无命中），带 `Origin` 的 `OPTIONS` 预检直接 405。
+3. **宿主 `connection.rpc` 通道**（选定）：`connection.rpc.handle(channel, handler)` 自带 Host/Origin 栅栏 + 会话 cookie 鉴权，浏览器侧 `ctx.get("connection").rpc.call(channel, endpoint, payload, signal)` 同源可用。活体样板是 profile 里已装的 `dsh-rewind-plugin`（`lib/index.js:2960-2976`）。
+
+通道名 `/dsh-hindsight-memory` 符合 `CHANNEL_PATTERN=/^\/[A-Za-z0-9._~-]+$/`（禁 `/api`）；端点段符合 `ENDPOINT_SEGMENT_PATTERN=/^[A-Za-z0-9_$.-]+$/`。
+
+### 31.3 端点（全部只读）
+`overview` / `layers` / `audit` / `operations` / `models` / `pages` / `config`。
+
+- 统一信封：成功 `{ok:true, value}`，失败 `{ok:false, error:{code, message, details:{}}}`（与宿主 `fullResponse` 的约定一致）；未知端点 ⇒ `hindsight/unknown-endpoint`；取数失败 ⇒ `hindsight/panel-failed`。
+- `config` 端点只回**白名单**字段（`pickPublicConfig`）：白名单而非黑名单 —— 新增配置默认不外泄。
+- 端点里出现任何写操作（`createKnowledgePage` / `deleteKnowledgeNode` / `setFactState` / `clearMentalModel` …）时，单测直接失败（`test/panel.test.js`）。
+- 每次请求重算 `client.scope = computeBankScope(config, label)` ⇒ 配置热更新后 bank scope 不会停在旧值。
+
+### 31.4 客户端席位
+`plugins.detail.section`（kind=list、scope=root）的 register 选项是 **id / order / label**（keyed 席位才用 key）。本插件注册 `id="dsh-hindsight-memory-health"`、`order=60`、label「记忆看板」。
+
+席位**没有 only 过滤** ⇒ 组件必须自己按 `subject` 判断并对无关 subject 返回 `null`（本插件只认 `subject.kind ∈ {bundle, row}` 且 `subject.pkg.name === "dsh-hindsight-memory"`）。
+
+client 半体的 `exports.inject` 是**服务名**列表（`["slots", "connection"]`），package.json 的 `dsh.client.inject` 是**包名**列表（`@deepseek-ai/dsh-client-connection`）—— 两层语义不同，不能混。
+
+### 31.5 落点
+- `src/panel.js`（纯函数、零 I/O）：归一化四个列表、`buildPanelSnapshot`、公开配置白名单。
+- `src/panel-rpc.js`：RPC 端点实现（依赖 `HindsightMemoryClient` 的 REST 方法）。
+- `src/index.js`：`ctx.inject(["connection"], (scope) => { const dispose = connection.rpc.handle(PANEL_RPC_CHANNEL, handler); scope.effect(() => dispose); })`。`ctx.inject` 不存在时（headless / 测试桩）直接跳过看板，**不会**让插件装载失败。
+- `src/ui-client.js`：`HindsightMemoryPanel` 组件 + 席位注册。`connection` 用 getter 延迟取（它是延迟注入的服务，apply 执行那一刻可能还没就绪）。
+
+### 31.6 验收
+- 单测 105 → **107**（新增 16 条面板契约测试），全绿。
+- 活体：对真实 Hindsight 跑 RPC 处理器 ⇒ `overview` 返回 bank=shared / 事实 536 条、分层 global 134 / project 194 / other 172、近重复 0 组、孤儿 observation 4、任务 100（completed 96 / processing 4）、精神模型与知识页清单齐、config 20 键；7 个端点全部 `ok=true`，未知端点返回 `hindsight/unknown-endpoint`。
+- `dsh headless --patch <overlay>` 旁路装载正常（插件照常工作）。
