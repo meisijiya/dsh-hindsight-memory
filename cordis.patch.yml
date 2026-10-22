@@ -1,0 +1,37 @@
+# dsh-hindsight-memory — DSH bundle patch
+#
+# `dsh plugin add` 装上本包后，DSH 会自动应用这个 patch，把插件挂进 profile。
+#
+# 🔴 `name` 写**包名**而不是绝对路径：
+#    loader 用 `import(name)` 加载插件；Windows 的 ESM 不接受裸绝对路径
+#    （ERR_UNSUPPORTED_ESM_URL_SCHEME），换机器也会断。
+#    本地联调可用 percent-encode 过的 `file://` URL，但那是开发态做法。
+- insert:
+    - id: hindsight-memory
+      name: 'dsh-hindsight-memory'
+      config:
+        # 总开关。false ⇒ 插件不注册任何东西，也不发起任何网络请求。
+        enabled: true
+        # 是否注入常驻系统提示词段（行为规约）。
+        inject: true
+        # 是否允许写记忆（retain）。false ⇒ 只读。
+        writeEnabled: true
+        # Hindsight 服务地址（Control Plane / API 根）。
+        apiUrl: 'http://127.0.0.1:8888'
+        # bank 基名。必须与 omp 侧 hindsight.bankId 一致（当前为 shared）。
+        bankId: 'shared'
+        # bank 前缀（omp 的 hindsight.bankIdPrefix）。留空。
+        bankIdPrefix: ''
+        # 作用域模式：global | per-project | per-project-tagged
+        # 与 omp 的 hindsight.scoping 取值一一对应。
+        scoping: 'per-project-tagged'
+        # 召回预算：low | mid | high（与 omp recallBudget 同名同义）。
+        budget: 'mid'
+        # 是否在会话首轮自动召回一次（落在会话历史里，不进系统提示词前缀）。
+        autoRecall: false
+        # 是否在回合结束自动留存会话结论。
+        autoRetain: false
+        # 自动留存的回合间隔（对齐 omp retainEveryNTurns 默认 3）。
+        retainEveryNTurns: 3
+        # 注入段顺序（字面数字；落在 FILE_REFERENCE(900) 与 TOOL_BASH(1000) 之间）。
+        sectionOrder: 950

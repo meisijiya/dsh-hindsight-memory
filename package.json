@@ -1,0 +1,58 @@
+{
+  "name": "dsh-hindsight-memory",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin that bridges the Hindsight memory service to DSH with omp-identical read/write semantics (single shared bank, project tag stamping, project+global recall).",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/**/*.js",
+    "scripts/**/*.mjs",
+    "docs/*.md",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22.6.0",
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "hindsight",
+    "omp",
+    "oh-my-pi",
+    "memory"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meisijiya/dsh-hindsight-memory.git"
+  },
+  "homepage": "https://github.com/meisijiya/dsh-hindsight-memory",
+  "bugs": {
+    "url": "https://github.com/meisijiya/dsh-hindsight-memory/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "panel": "node scripts/panel.mjs",
+    "verify:live": "node scripts/verify-live.mjs"
+  }
+}
