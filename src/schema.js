@@ -62,6 +62,8 @@ export const FIELD_DOCS = {
 	recallTimeoutMs: "召回超时（毫秒）。omp 的 recallTimeoutMs 默认 30000。",
 	retainTimeoutMs: "写入超时（毫秒）。omp 的 retainTimeoutMs 默认 60000。",
 	reflectTimeoutMs: "综合问答超时（毫秒）。omp 的 reflectTimeoutMs 默认 120000。",
+	maintenanceTimeoutMs:
+		"维护类长操作超时（毫秒）。必须大于服务端 LLM 预算（本机 600s），否则永远客户端先超时。默认 900000。",
 	hygieneThreshold: "近重复阈值（0-1）。越高越保守。0.9 只抓逐字重复，0.8 能抓「同一件事换个说法」。",
 	hygieneMaxFacts: "单次扫描条数上限。防 O(n²) 爆掉。",
 	hygieneProjectMission: "项目层 observation 的保留口径（写入 bank 的 consolidation_strategies）。",
@@ -111,6 +113,10 @@ export const Config = z
 			recallTimeoutMs: z.number().default(30_000).description(FIELD_DOCS.recallTimeoutMs),
 			retainTimeoutMs: z.number().default(60_000).description(FIELD_DOCS.retainTimeoutMs),
 			reflectTimeoutMs: z.number().default(120_000).description(FIELD_DOCS.reflectTimeoutMs),
+			maintenanceTimeoutMs: z
+				.number()
+				.default(900_000)
+				.description(FIELD_DOCS.maintenanceTimeoutMs),
 			hygieneThreshold: z.number().default(0.9).description(FIELD_DOCS.hygieneThreshold),
 			hygieneMaxFacts: z.number().default(500).description(FIELD_DOCS.hygieneMaxFacts),
 			hygieneProjectMission: z

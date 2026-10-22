@@ -5,6 +5,13 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.6.1 — 维护层超时对齐服务端预算
+
+- **问题**：`memory_mental_models dry-run` / `refresh` 在服务端 LLM 繁忙时一律报「Hindsight 请求超时（120000ms）」。取证：容器 env `HINDSIGHT_API_LLM_TIMEOUT=600`、`HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT=600`、`HINDSIGHT_API_REFLECT_WALL_TIMEOUT=1800` —— **服务端自己允许跑 600s，客户端却只有 120s 的 deadline**，所以永远是我们先超时、服务端还在算。120s 是**客户端**上限，不是服务端上限。
+- **修复**：新增配置 `maintenanceTimeoutMs`（默认 900000 = 15 分钟，上限 1800000），并把服务端 LLM 长任务（`dry-run-refresh` / `refresh` / `dry-run-extract`）与知识页、精神模型的增删改统一改用这个 deadline；`reflectTimeoutMs` 的可配上限从 600000 抬到 1800000（对齐服务端 reflect 墙钟）。
+- **兜底语义**：新增 `timeout()` 解析器 —— 比下限还小的值**回落默认值**而不是夹到下限（把 10ms 夹成 1000ms 仍然是个必然超时的值，已知可用的默认值才是真兜底）。
+- 工具名与工具数量不变（仍 9 个），只改了配置键 ⇒ 属于 0.x 的向后兼容修复。
+
 ## 0.6.0 — 维护层：记忆不只增
 
 - `memory_hygiene` 新增五个动作：`audit`（只读体检）、`retract`（软退役）、`restore`（恢复）、`correct`（改写正文）、`supersede`（新事实取代旧事实）。

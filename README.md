@@ -339,7 +339,7 @@ Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalid
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 84 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 85 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
@@ -386,4 +386,5 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
 | 0.4.0 | 对齐 omp 报告：新增**精神模型**层（`memory_mental_models`）+ **运维观测**（`memory_operations`）+ `memory_status` 的 bank 体检与队列体检；`memory_hygiene` 支持按层 `scope`；写入补本地时区 `timestamp` + `metadata.session_id`；自动留存对齐 omp 的 `retainEveryNTurns=3`（原来每轮都写，项目层被灌到 137 条） |
 | 0.5.0 | 搬入**知识页**层（`memory_pages`）与 **initiative** 登记（`memory_initiative`）：服务端 `/knowledge-base` 原生能力，产出盖项目标签、不复用 `source:`/`harness:`、写入 async + `metadata.session_id`；新增 `src/pages.js` + 13 条单测；配置 `knowledgePages` 可整体关掉 |
-| 0.6.0 | **记忆维护（不只增）**：记忆必须可维护，否则错事实堆积＝认知错位。维护并入既有工具（工具总数仍 9）：`memory_hygiene` 新增 `audit`/`retract`/`restore`/`correct`/`supersede`；`memory_pages` 新增 `update`/`delete`；`memory_mental_models` 新增 `delete`/`clear`/`dry-run`；破坏性动作必须 `confirm=true`，`retract`/`correct`/`supersede` 还必须带 `reason`（否则不碰服务端）；事实层退役可逆（`restore` 改回 `valid`）；新增 `src/maintenance.js`（纯函数、零 import）+ 14 条单测；配置 `maintenanceStaleDays`/`maintenanceStuckMinutes`/`maintenanceRequireConfirm` |
+| 0.6.1 | **维护层超时对齐服务端预算**：新增 `maintenanceTimeoutMs`（默认 900000ms），服务端 LLM 长任务（精神模型 refresh/dry-run-refresh、dry-run-extract、知识页与精神模型增删改）统一用它 —— 此前客户端 deadline 只有 120s，而服务端 `HINDSIGHT_API_LLM_TIMEOUT=600`、reflect 墙钟 1800s，永远是我们先超时；新增 `timeout()` 解析器（小于下限回落默认值而非夹到下限） |
+| 0.6.0 | **记忆维护（不只增）**：记忆必须可维护，否则错事实堆积＝认知错位。维护并入既有工具（工具总数仍 9）：`memory_hygiene` 新增 `audit`/`retract`/`restore`/`correct`/`supersede`；`memory_pages` 新增 `update`/`delete`；`memory_mental_models` 新增 `delete`/`clear`/`dry-run`；破坏性动作必须 `confirm=true`，`retract`/`correct`/`supersede` 还必须带 `reason`（否则不碰服务端）；事实层退役可逆（`restore` 改回 `valid`）；新增 `src/maintenance.js`（纯函数、零 import）+ 15 条单测；配置 `maintenanceStaleDays`/`maintenanceStuckMinutes`/`maintenanceRequireConfirm` |

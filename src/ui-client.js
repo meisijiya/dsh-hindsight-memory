@@ -208,6 +208,14 @@ window.__ModuleLoader__.load({
 				doc: "对应 omp 的 reflectTimeoutMs。",
 			},
 			{
+				group: "进阶",
+				key: "maintenanceTimeoutMs",
+				label: "维护长操作超时（ms）",
+				type: "number",
+				default: 900000,
+				doc: "服务端 LLM 预算 600s / reflect 墙钟 1800s；客户端 deadline 必须更长，否则永远是我们先超时。",
+			},
+			{
 				group: "记忆卫生",
 				key: "hygieneThreshold",
 				label: "近重复阈值（0-1）",

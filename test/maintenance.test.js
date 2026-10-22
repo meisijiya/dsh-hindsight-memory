@@ -222,12 +222,17 @@ test("畸形输入不抛异常（维护路径容错优先）", () => {
 });
 
 test("维护配置字段在 config / schema / ui 三处一致", () => {
-	const keys = ["maintenanceStaleDays", "maintenanceStuckMinutes", "maintenanceRequireConfirm"];
+	const keys = [
+		"maintenanceStaleDays",
+		"maintenanceStuckMinutes",
+		"maintenanceRequireConfirm",
+		"maintenanceTimeoutMs",
+	];
 	for (const key of keys) {
 		assert.ok(key in DEFAULTS, `DEFAULTS 缺少 ${key}`);
 		assert.ok(key in FIELD_DOCS, `FIELD_DOCS 缺少 ${key}`);
 	}
-	assert.equal(Object.keys(DEFAULTS).filter((key) => key.startsWith("maintenance")).length, 3);
+	assert.equal(Object.keys(DEFAULTS).filter((key) => key.startsWith("maintenance")).length, 4);
 	const config = normalizeConfig({});
 	assert.equal(config.maintenanceStaleDays, 180);
 	assert.equal(config.maintenanceStuckMinutes, 30);

@@ -406,7 +406,7 @@ export class HindsightMemoryClient {
 		return this.postJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/refresh`,
 			{},
-			{ signal, timeoutMs: this.config.retainTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -561,7 +561,7 @@ export class HindsightMemoryClient {
 		return this.postJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/memories/dry-run-extract`,
 			body,
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -570,7 +570,7 @@ export class HindsightMemoryClient {
 		return this.patchJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/nodes/${encodeSegment(id)}`,
 			patch,
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -578,7 +578,7 @@ export class HindsightMemoryClient {
 	async deleteKnowledgeNode(id, { signal } = {}) {
 		return this.deleteJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/knowledge-base/nodes/${encodeSegment(id)}`,
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -586,7 +586,7 @@ export class HindsightMemoryClient {
 	async deleteMentalModel(id, { signal } = {}) {
 		return this.deleteJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}`,
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -595,7 +595,7 @@ export class HindsightMemoryClient {
 		return this.postJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/clear`,
 			{},
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 
@@ -604,7 +604,7 @@ export class HindsightMemoryClient {
 		return this.postJson(
 			`/v1/default/banks/${encodeSegment(this.bankId)}/mental-models/${encodeSegment(id)}/dry-run-refresh`,
 			{},
-			{ signal, timeoutMs: this.config.reflectTimeoutMs },
+			{ signal, timeoutMs: this.config.maintenanceTimeoutMs },
 		);
 	}
 

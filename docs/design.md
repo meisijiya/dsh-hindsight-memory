@@ -981,3 +981,30 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 - **工具级护栏（离线可验）**：用 mock ctx 跑 `apply()`，断言注册工具数 **仍为 9**（维护并入既有工具、不新增工具），且 `memory_hygiene` 的 `retract` 缺 `confirm` ⇒ `confirm_required`、带 `confirm` 缺 `reason` ⇒ `reason_required`，`memory_pages` 的 `delete`、`memory_mental_models` 的 `delete` / `clear` 同样在**发请求之前**就被拦下。
 
 全量闸门：`node --test "test/*.test.js"` ⇒ **85 个单测全过**（基线 70 + 本轮 15）。
+
+## 28. v0.6.1：120s 超时到底是谁的（2026-10-22）
+
+### 28.1 现象
+`memory_mental_models action=dry-run` 固定报：`Hindsight 请求超时（120000ms）：/v1/default/banks/shared/mental-models/<id>/dry-run-refresh`。
+
+### 28.2 取证：120s 是**客户端**上限，不是服务端上限
+- 容器实读 env：`HINDSIGHT_API_LLM_TIMEOUT=600`、`HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT=600`、`HINDSIGHT_API_REFLECT_WALL_TIMEOUT=1800`（容器创建于 2026-10-22T08:10:18Z，上一个容器保留为 `hindsight-old` 可回滚）。
+- 插件侧：`src/config.js` 的 `reflectTimeoutMs` 默认 120000、`retainTimeoutMs` 60000；而 `refreshMentalModel` 当时用的是 `retainTimeoutMs`（**60s**）、`dryRunRefreshMentalModel` 用 `reflectTimeoutMs`（120s）。
+- ⇒ 服务端允许算 600s，客户端只给 60~120s ⇒ **永远是我们先超时**。同一现象还表现为库里长期 `processing` 的 `refresh_mental_model`；容器重建后那批僵尸行已消失（现 `refresh_mental_model` 46 completed / 1 failed，非终态只剩 2 条）。
+
+### 28.3 修复
+- 新增 `maintenanceTimeoutMs`（默认 900000 = 15min，上限 1800000），并把服务端 LLM 长任务统一改用这个 deadline：`dry-run-refresh`、`refresh`、`dry-run-extract`、知识页与精神模型的 `update`/`delete`/`clear`。
+- `reflectTimeoutMs` 的可配上限从 600000 抬到 1800000（对齐服务端 reflect 墙钟）。
+- 新增 `timeout()` 解析器：比下限还小就**回落默认值**（不夹到下限）—— 夹取会把 10ms 变成 1000ms，依然是必然超时的值。
+- 工具名与工具数量不变（仍 9 个），只新增配置键 ⇒ 0.x 的向后兼容修复。
+
+### 28.4 闸门
+- `test/timeouts.test.js`（3 条）：默认值 > 服务端 LLM 预算（600000）；异常值回落默认、上限夹到 1800000；7 个长任务端点全部使用 `maintenanceTimeoutMs`。
+- `test/maintenance.test.js` 的「维护配置字段三处一致」用例同步补上 `maintenanceTimeoutMs`（DEFAULTS / FIELD_DOCS / schema / ui 四处都在）。
+- 全量：`node --test "test/*.test.js"` ⇒ **88 个单测全过**（基线 85 + 本轮 3）。
+
+### 28.5 知识页与 bank 的关系（回答「bank 更新了，知识页会更新吗」）
+- 页正文是**服务端按 trigger 合成的快照**，不是实时视图。页的 `tags` 是**取材范围**（scoping），不是标签。
+- 服务端**没有单页 refresh 端点**（openapi：`/knowledge-base/pages/{id}` 只有 get；refresh/dry-run-refresh 只存在于 `mental-models`）。页靠 `consolidation_strategies` 与 trigger（`mode:"delta"` + `refresh_after_consolidation:true`）在 **consolidate 之后**重算。
+- ⇒ 洗账的正确顺序是：**先洗 bank 事实 → 再 consolidate → 再核对页正文**（`is_stale` 会告诉你服务端是否认为它过期）。
+- 插件侧已有 `memory_pages update/delete`（可改可删 ⇒ 「只增不改」已补齐）；缺的是「刷新一页」的显式动作 —— 实际路径是 `memory_hygiene action=consolidate`。

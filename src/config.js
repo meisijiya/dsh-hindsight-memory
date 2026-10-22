@@ -51,6 +51,17 @@ export const DEFAULTS = {
 	recallTimeoutMs: 30_000,
 	retainTimeoutMs: 60_000,
 	reflectTimeoutMs: 120_000,
+	/**
+	 * 维护类长操作的超时（毫秒）。
+	 *
+	 * 🔴 为什么单独一个键：服务端的 LLM 预算是 600s、reflect 墙钟是 1800s
+	 *   （容器 env：HINDSIGHT_API_LLM_TIMEOUT / HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT
+	 *    = 600，HINDSIGHT_API_REFLECT_WALL_TIMEOUT = 1800）。
+	 *   客户端 deadline 必须比服务端预算更长，否则永远是我们先超时、
+	 *   服务端还在算 —— 表现为 dry-run-refresh / refresh 报「120000ms 超时」。
+	 *   900s 是留足余量又不至于让会话无限挂住的值。
+	 */
+	maintenanceTimeoutMs: 900_000,
 	/** 传输层：rest | mcp。默认 mcp（服务端官方 per-bank MCP 端点）。 */
 	transport: "mcp",
 	/** 记忆卫生：近重复判定阈值（0-1）。越高越保守。 */
@@ -118,6 +129,19 @@ function str(value, fallback) {
 }
 
 /**
+ * 超时专用解析：**比下限还小就回落默认值**，而不是夹到下限。
+ *
+ * 🔴 为什么不用 int() 的夹取语义：把 10ms 夹成 1000ms 仍然是个必然超时的值，
+ *   而“已知可用的默认值”才是真正的安全兜底。超大值才夹到上限。
+ */
+function timeout(value, fallback, min, max) {
+	const n = Number(value);
+	if (!Number.isFinite(n)) return fallback;
+	if (n < min) return fallback;
+	return Math.min(max, Math.trunc(n));
+}
+
+/**
  * StandardSchemaV1 校验器。
  *
  * 为什么自己实现：插件必须能被任何安装形态加载（包括 file:// 直接加载），
@@ -175,7 +199,13 @@ export function normalizeConfig(raw = {}) {
 		projectLabelOverride: str(raw.projectLabelOverride, DEFAULTS.projectLabelOverride),
 		recallTimeoutMs: int(raw.recallTimeoutMs, DEFAULTS.recallTimeoutMs, 1_000, 600_000),
 		retainTimeoutMs: int(raw.retainTimeoutMs, DEFAULTS.retainTimeoutMs, 1_000, 600_000),
-		reflectTimeoutMs: int(raw.reflectTimeoutMs, DEFAULTS.reflectTimeoutMs, 1_000, 600_000),
+		reflectTimeoutMs: int(raw.reflectTimeoutMs, DEFAULTS.reflectTimeoutMs, 1_000, 1_800_000),
+		maintenanceTimeoutMs: timeout(
+			raw.maintenanceTimeoutMs,
+			DEFAULTS.maintenanceTimeoutMs,
+			60_000,
+			1_800_000,
+		),
 		transport: raw.transport === "rest" ? "rest" : "mcp",
 		hygieneThreshold: Math.min(
 			1,
