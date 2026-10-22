@@ -8,6 +8,9 @@
 ## 0.6.0 — 维护层：记忆不只增
 
 - `memory_hygiene` 新增五个动作：`audit`（只读体检）、`retract`（软退役）、`restore`（恢复）、`correct`（改写正文）、`supersede`（新事实取代旧事实）。
+- `memory_pages` 新增 `update`（改标题 / 取数问题 / 标签 / 上下文上限）与 `delete`（删页，**不可逆**）。
+- `memory_mental_models` 新增 `delete`（删模型）、`clear`（清空内容）、`dry-run`（预演刷新，不落库）。
+- 已知的服务端侧限制：`memory_mental_models dry-run` 走服务端 LLM 刷新，实测在服务端繁忙时会 120s 超时（与那批长期 `processing` 的 `refresh_mental_model` 同源，属服务端刷新能力的问题，不是工具逻辑错误）。
   **工具总数仍为 9、公共 API 的工具名不变**——维护并入既有工具，不新增入口。
 - 新增 `src/maintenance.js`：体检与补丁生成全是纯函数（可单测），`guardAction` 统一把「缺确认/缺理由」的请求拦在落手之前。
 - 破坏性动作护栏：缺 `confirm=true` ⇒ `{ok:false,error:"confirm_required"}`；缺 `reason` ⇒ `{ok:false,error:"reason_required"}`。

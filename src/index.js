@@ -669,8 +669,19 @@ export async function apply(ctx, rawConfig = {}) {
 			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
 			execute: async (args, exec) => {
 				try {
-					const channel = await requireChannel(exec);
 					const action = String(args?.action ?? "preview");
+					// ── 维护层（v0.6.0）：先确认、再要理由，两者不满足都不碰服务端 ──
+					if (
+						action === "audit" ||
+						action === "retract" ||
+						action === "restore" ||
+						action === "correct" ||
+						action === "supersede"
+					) {
+						const guardError = maintenanceGuard("memory_hygiene", action, args, config);
+						if (guardError) return toolJson(guardError);
+					}
+					const channel = await requireChannel(exec);
 					const client = channel.client;
 
 					if (action === "consolidate") {
@@ -686,18 +697,6 @@ export async function apply(ctx, rawConfig = {}) {
 							signal: exec?.signal,
 						});
 						return toolJson({ ok: true, action, bankId: client.bankId, preview });
-					}
-
-					// ── 维护层（v0.6.0）：先确认、再要理由，两者不满足都不碰服务端 ──
-					if (
-						action === "audit" ||
-						action === "retract" ||
-						action === "restore" ||
-						action === "correct" ||
-						action === "supersede"
-					) {
-						const guardError = maintenanceGuard("memory_hygiene", action, args, config);
-						if (guardError) return toolJson(guardError);
 					}
 
 					if (action === "audit") {
@@ -990,9 +989,14 @@ export async function apply(ctx, rawConfig = {}) {
 			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
 			execute: async (args, exec) => {
 				try {
+					const action = String(args?.action ?? "list");
+					// ── 维护层（v0.6.0）：破坏性动作先确认、再要理由，都不满足就不碰服务端 ──
+					if (action === "delete" || action === "clear") {
+						const guardError = maintenanceGuard("memory_mental_models", action, args, config);
+						if (guardError) return toolJson(guardError);
+					}
 					const channel = await requireChannel(exec);
 					const client = channel.client;
-					const action = String(args?.action ?? "list");
 					const scope = computeBankScope(config, channel.label);
 					const projectTags = scope.retainTags ?? [];
 					const ids = mentalModelIds(config, channel.label);
@@ -1099,8 +1103,6 @@ export async function apply(ctx, rawConfig = {}) {
 					}
 
 					if (action === "delete" || action === "clear") {
-						const guardError = maintenanceGuard("memory_mental_models", action, args, config);
-						if (guardError) return toolJson(guardError);
 						const id = String(args?.id ?? "").trim();
 						if (!id) {
 							return toolJson({
@@ -1247,9 +1249,14 @@ export async function apply(ctx, rawConfig = {}) {
 			output: { schema: JSON_OBJECT_OUTPUT, render: (_args, value) => toolJson(value).content },
 			execute: async (args, exec) => {
 				try {
+					const action = String(args?.action ?? "list");
+					// ── 维护层（v0.6.0）：破坏性动作先确认、再要理由，都不满足就不碰服务端 ──
+					if (action === "delete") {
+						const guardError = maintenanceGuard("memory_pages", action, args, config);
+						if (guardError) return toolJson(guardError);
+					}
 					const channel = await requireChannel(exec);
 					const client = channel.client;
-					const action = String(args?.action ?? "list");
 					const scope = computeBankScope(config, channel.label);
 					const projectTags = scope.retainTags ?? [];
 
@@ -1378,8 +1385,6 @@ export async function apply(ctx, rawConfig = {}) {
 					}
 
 					if (action === "delete") {
-						const guardError = maintenanceGuard("memory_pages", action, args, config);
-						if (guardError) return toolJson(guardError);
 						const pageId = String(args?.pageId ?? args?.id ?? "").trim();
 						if (!pageId) {
 							return toolJson({

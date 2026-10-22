@@ -898,7 +898,7 @@ DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只�
    于是标签退化成 `project:22923` —— 这是 `label.js` 的**正确降级**（basename(cwd).toLowerCase()），
    但意味着**在非项目目录里跑插件会污染项目层标签**。验证必须在真实项目目录里跑。
 
-## 27. v0.6.0：维护层——记忆必须可维护，不只增
+## 27. 记忆维护能力（v0.6.0）
 
 ### 27.1 问题
 用户诉求（2026-10-22）：「知识页包括各种 hindsight 中的记忆功能要确保能够维护，即不要只增，不然错误记忆积累起来会造成认知错位。DSH 这边做好即可。omp 那边……我们 DSH 插件就要严谨对待了，这是我们个人开发的。」
@@ -910,19 +910,35 @@ DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只�
 - `PATCH .../memories/{id}` 可改 `text`；服务端会**重新嵌入**这条事实并**丢弃它派生的 observation**（纠正事实会连带清掉旧观察结论——宁可少一条观察，也不要留一条错的）。
 - `GET .../memories/{id}/history` 端点存在，但**当前返回空数组**：服务端还没记录变更历史 ⇒ "什么时候被改的"只能看 `edited_at`。
 - 知识页层可改可删：`PATCH`/`DELETE .../knowledge-base/nodes/{node_id}`。
-- 精神模型层可改可删可清空：`PATCH`/`DELETE .../mental-models/{id}`、`POST .../mental-models/{id}/clear`。
+- 精神模型层可改可删可清空：`PATCH`/`DELETE .../mental-models/{id}`、`POST .../mental-models/{id}/clear`；刷新可预演：`POST .../mental-models/{id}/dry-run-refresh`（不落库）。
+- `audit` 用到的只读端点：`GET .../memories/list`、`GET .../knowledge-base/tree`、`GET .../knowledge-base/pages/{page_id}`、`GET .../operations`。
 - 写入前预演：`POST .../memories/dry-run-extract`，body 是**根级 `content` + `context`**（不是 `{items:[...]}`——那是 `/memories` 的形状；踩过 422 `{"type":"missing","loc":["body","content"]}`）。
 
 ### 27.3 落点：维护并入 `memory_hygiene`，不新增工具
-公共 API = 工具名 + 配置键。`memory_hygiene` 已有 hygiene 语义（分层 / 去重 / 退役），维护是它的自然延伸 ⇒ **新增动作而不是新工具**，工具总数保持 9，模型侧协议不用改。
+公共 API = 工具名 + action。维护是既有 hygiene 语义（分层 / 去重 / 退役）的自然延伸 ⇒ **新增动作而不是新工具**，工具总数保持 9，模型侧协议不用改。
 
-| action | 作用 | 落点 | 需要 confirm | 需要 reason |
-|---|---|---|---|---|
-| `audit` | 六类体检：事实总数、陈旧（超 `maintenanceStaleDays`）、被取代、孤儿 observation、近重复、空知识页、卡住任务 | 只读 | 否 | 否 |
-| `retract` | 软退役一批事实（`state=invalidated` + reason） | 事实层 | 是 | 是 |
-| `restore` | 把已退役事实改回 `valid` | 事实层 | 是 | 否 |
-| `correct` | 改写事实正文 | 事实层 | 是 | 是 |
-| `supersede` | 新事实写入 + 旧事实软退役 | 事实层 | 是 | 是 |
+| 工具 | action | 作用 | 落点 | 需要 confirm | 需要 reason |
+|---|---|---|---|---|---|
+| `memory_hygiene` | `audit` | 只读体检：事实总数、陈旧（超 `maintenanceStaleDays`）、被取代、孤儿 observation、近重复、空知识页、卡住任务 | 只读 | 否 | 否 |
+| `memory_hygiene` | `retract` | 软退役一条事实（`state=invalidated` + reason） | 事实层 | 是 | 是 |
+| `memory_hygiene` | `restore` | 把已退役事实改回 `valid` | 事实层 | 是 | 否 |
+| `memory_hygiene` | `correct` | 改写事实正文 | 事实层 | 是 | 是 |
+| `memory_hygiene` | `supersede` | 新事实写入 + 旧事实软退役 | 事实层 | 是 | 是 |
+| `memory_pages` | `update` | 改页的标题 / 取数问题 / 标签 / 上下文上限 | 知识页层 | 否 | 否 |
+| `memory_pages` | `delete` | 删页 | 知识页层 | 是 | 否 |
+| `memory_mental_models` | `delete` | 删精神模型 | 精神模型层 | 是 | 否 |
+| `memory_mental_models` | `clear` | 清空精神模型内容 | 精神模型层 | 是 | 否 |
+| `memory_mental_models` | `dry-run` | 预演刷新，不落库 | 精神模型层 | 否 | 否 |
+
+护栏矩阵（同一份 `src/maintenance.js` 的 `guardAction`）：
+
+| 动作 | confirm | reason | 可逆性 |
+|---|---|---|---|
+| `retract` / `correct` / `supersede` | 必须 `confirm=true` | 必须 | 事实层**可逆**（`restore` 改回 `valid`） |
+| `restore` | 必须 | 不需要 | 幂等 |
+| `memory_pages delete` / `memory_mental_models delete` | 必须 | 不需要 | **不可逆**（删了就是删了） |
+| `memory_mental_models clear` | 必须 | 不需要 | 可用 `refresh` 重新生成 |
+| `audit` / `memory_pages update` / `dry-run` | 不需要 | 不需要 | 只读 / 可再编辑 |
 
 ### 27.4 护栏（`src/maintenance.js` → `guardAction`）
 - `requiresConfirm` 的动作缺 `confirm === true` ⇒ 返回 `{ok:false,error:"confirm_required",message:…}`，**不出计划、不落手**。
@@ -948,3 +964,19 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 
 ### 27.8 本轮同时修掉的静默偏差
 `src/hygiene.js` 的 `recency(fact)` 原本只读下划线时间键（`updated_at`/`created_at`/`timestamp`/`stored_at`），而 `findDuplicateGroups` 产出的成员用的是驼峰 `createdAt` ⇒ `planPrune` 实际"保留扫描序第一条"而不是"最新一条"。修法：recency 依次读 `updated_at → updatedAt → created_at → createdAt → timestamp → stored_at`；成员映射补 `updatedAt: fact?.updated_at ?? null`。
+
+### 27.9 测试覆盖摘要（`test/maintenance.test.js`，14 个用例）
+纯函数层（`src/maintenance.js`，零 import、不碰网络，可离线跑）：
+- **陈旧边界**：`age >= maintenanceStaleDays × 86400000` 闭区间——正好 180 天算陈旧，179 天不算；无时间戳的事实**不判**陈旧（保守，宁可漏判不可误伤）。
+- **observation 默认排除**：`staleCandidates` 默认不含 observation，`includeObservations:true` 才纳入。
+- **孤儿 observation**：`source_memory_ids` 指向作废 / 缺失 / 本身是 observation 的来源 ⇒ 判孤儿；来源活跃 ⇒ 不判。
+- **被取代**：归一化正文被**更长且不更早**的活跃事实严格包含 ⇒ 判被取代。
+- **空知识页**：正文为空或只剩 `No content yet.` ⇒ 判空；树节点（没有正文字段）不判。
+- **卡住任务**：`pending` / `processing` 超过 `maintenanceStuckMinutes` ⇒ 判卡住。
+- **`auditPlan`**：六类分组的 `counts` 与 `groups` 数量对得上，`actionable` 汇总一致。
+- **护栏矩阵**：`requiresConfirm`（retract/restore/correct/supersede/delete/clear）与 `requiresReason`（retract/correct/supersede）两套动作集合；缺 confirm ⇒ `confirm_required`；缺 reason ⇒ `reason_required`。
+- **PATCH 体形状**：`correctionPatch`（`{text,reason}`）、`supersedePatch`（`{state:"invalidated",reason}`）、`restorePatch`（`{state:"valid"}`）。
+- **畸形输入**：`null` / 非数组 / 缺字段一律不抛异常，返回 `[]` / `null` / 空对象。
+- **字段一致性**：`maintenanceStaleDays` / `maintenanceStuckMinutes` / `maintenanceRequireConfirm` 在 `src/config.js`、`src/schema.js`、`src/ui-client.js` 三处都在。
+
+全量闸门：`node --test "test/*.test.js"` ⇒ **84 个单测全过**（基线 70 + 本轮 14）。

@@ -34,10 +34,10 @@
 | `memory_retain(content, tier?)` | 写入耐久事实。`tier=project`（默认）只有本项目可见；`tier=global` 所有项目可见 | omp 的 `retain` |
 | `memory_reflect(query, scope?)` | 让记忆服务综合回答（不是返回原始条目） | omp 的 `reflect` |
 | `memory_status()` | 连通性、当前记忆库（含 bank 体检告警）、项目标签、各层条数与类型分布、任务队列健康度 | omp 无（诊断用） |
-| `memory_hygiene(action?, scope?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中；`scope` 可锁定某一层 | omp 无（见「记忆卫生」一节） |
-| `memory_mental_models(action?)` | 维护**精神模型**（跨会话的经验总结）：`ensure` 幂等建好三个模型（用户偏好 + 本项目约定/决策），`list`/`content`/`refresh`/`patch` | omp 启动时自动建同样的三个（见「精神模型」一节） |
+| `memory_hygiene(action?, scope?)` | 整理**共享记忆库**：预览/清理近重复事实、触发 observation 合并、查看分层与口径命中；**维护动作** `audit`/`retract`/`restore`/`correct`/`supersede`（见「记忆维护」一节）；`scope` 可锁定某一层 | omp 无（见「记忆卫生」一节） |
+| `memory_mental_models(action?)` | 维护**精神模型**（跨会话的经验总结）：`ensure` 幂等建好三个模型（用户偏好 + 本项目约定/决策），`list`/`content`/`refresh`/`patch`，以及维护动作 `delete`/`clear`/`dry-run`（见「记忆维护」一节） | omp 启动时自动建同样的三个（见「精神模型」一节） |
 | `memory_operations(action?)` | 运维观测：列出抽取/刷新/合并任务，可 `retry` 失败任务 | omp 无（但 omp 也看不见失败任务） |
-| `memory_pages(action?, id?, query?, title?, sourceQuery?)` | **知识页**层（服务端合成的长文）：`list` 读知识库树、`search` 检索、`read` 读整页、`create` 建页（自动盖本项目标签） | omp 无（服务端同一套能力） |
+| `memory_pages(action?, id?, query?, title?, sourceQuery?)` | **知识页**层（服务端合成的长文）：`list` 读知识库树、`search` 检索、`read` 读整页、`create` 建页（自动盖本项目标签），以及维护动作 `update`/`delete`（见「记忆维护」一节） | omp 无（服务端同一套能力） |
 | `memory_initiative(action?, title?, question?)` | 把**正在做的事**登记成受跟踪的一页 + 一条标记事实（页与事实互链）：`capture` 登记、`list` 查看 | omp 无（服务端同一套能力） |
 
 > 知识页与 initiative 是 **Hindsight 服务端原生能力**（`/knowledge-base`），本插件只是把它包成与 omp 同语义的工具：产出盖 `project:<小写项目名>` 标签、不复用官方的 `source:`/`harness:` 标签、写入走 `async:true` + `metadata.session_id`。可用配置 `knowledgePages: false` 整体关掉这两个工具。
@@ -306,25 +306,31 @@ memory_initiative list → ok, count=1, markers=[]（标记事实异步落库，
 
 `knowledgePages: false` 可整体关掉这一层（工具在 apply 时决定是否注册，见「缓存稳定性」）。
 
-## 维护（不只是增：可改、可退役、可纠正）
+## 记忆维护（不只增）
 
 Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalidated"`）与可回滚改写。所以「维护」不是额外功能，而是记忆系统的必需品：写错的事实如果只能靠再写一条去覆盖，旧错事实仍会参与召回，认知错位就是这么积累出来的。
 
-本插件把维护做成 `memory_hygiene` 的动作集（**不新增工具**，工具总数仍是 9）：
+维护并入**既有工具的动作**（**不新增工具**，工具总数仍是 9）：
 
-| action | 作用 | 落点 | 破坏性 |
-|---|---|---|---|
-| `audit` | 六类体检：事实总数 / 陈旧 / 被取代 / 孤儿 observation / 近重复 / 空知识页 / 卡住任务 | 只读 | 否 |
-| `retract` | 软退役一批事实（`state=invalidated` + reason） | 事实层 | **是** |
-| `restore` | 把已退役事实改回 `valid` | 事实层 | 是 |
-| `correct` | 改写事实正文 | 事实层 | 是 |
-| `supersede` | 新事实写入 + 旧事实软退役 | 事实层 | 是 |
+| 工具 | 新 action | 作用 | 破坏性 | 需要 reason |
+|---|---|---|---|---|
+| `memory_hygiene` | `audit` | 只读体检：陈旧 / 被取代 / 孤儿 observation / 近重复 / 空知识页 / 卡住任务 | 否 | 否 |
+| `memory_hygiene` | `retract` | 软退役一条事实（`state=invalidated` + reason，可逆） | **是** | 是 |
+| `memory_hygiene` | `restore` | 把已退役事实改回 `valid` | **是** | 否 |
+| `memory_hygiene` | `correct` | 改写事实正文（服务端重新嵌入并丢弃派生 observation） | **是** | 是 |
+| `memory_hygiene` | `supersede` | 先写入新事实，再软退役旧事实 | **是** | 是 |
+| `memory_pages` | `update` | 改一页的标题 / 取数问题 / 标签 / 上下文上限 | 否 | 否 |
+| `memory_pages` | `delete` | 删一页（**不可逆**） | **是** | 否 |
+| `memory_mental_models` | `delete` | 删一个精神模型（**不可逆**） | **是** | 否 |
+| `memory_mental_models` | `clear` | 清空一个精神模型的内容 | **是** | 否 |
+| `memory_mental_models` | `dry-run` | 预演刷新会产出什么，不落库 | 否 | 否 |
 
 护栏（`src/maintenance.js` 的 `guardAction`）：
 
-- 需要确认的动作缺 `confirm=true` ⇒ 直接返回 `{ok:false,error:"confirm_required"}`，**不出计划、不落手**。
-- 需要理由的动作缺 `reason` ⇒ 返回 `{ok:false,error:"reason_required"}`。
-- 退役是**可逆的**：`restore` 能把 `invalidated` 改回 `valid`——「删错」有回头路。
+- 破坏性动作（`retract` / `restore` / `correct` / `supersede` / `delete` / `clear`）缺 `confirm=true` ⇒ 返回 `{ok:false,error:"confirm_required"}`，**一个服务端请求都不发**。
+- 需要理由的动作（`retract` / `correct` / `supersede`）缺 `reason` ⇒ 返回 `{ok:false,error:"reason_required"}`。
+- 事实层的退役是**可逆的**：`restore` 能把 `invalidated` 改回 `valid`——「删错」有回头路。
+- 每条写路径都带 `timestamp`（本地时区）+ `metadata.session_id`，与 `memory_retain` 同口径。
 
 配置：`maintenanceStaleDays`（默认 180，陈旧判定）、`maintenanceStuckMinutes`（默认 30，卡住任务判定）、`maintenanceRequireConfirm`（默认 true；不建议关）。
 
@@ -333,7 +339,7 @@ Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalid
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 70 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 84 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
@@ -380,4 +386,4 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | 0.3.1 | 修 v0.3.0 引入的入口 `ReferenceError`（默认导出引用了不存在的 `Config` 绑定）→ 补 `test/entry.test.js` 契约测试 |
 | 0.4.0 | 对齐 omp 报告：新增**精神模型**层（`memory_mental_models`）+ **运维观测**（`memory_operations`）+ `memory_status` 的 bank 体检与队列体检；`memory_hygiene` 支持按层 `scope`；写入补本地时区 `timestamp` + `metadata.session_id`；自动留存对齐 omp 的 `retainEveryNTurns=3`（原来每轮都写，项目层被灌到 137 条） |
 | 0.5.0 | 搬入**知识页**层（`memory_pages`）与 **initiative** 登记（`memory_initiative`）：服务端 `/knowledge-base` 原生能力，产出盖项目标签、不复用 `source:`/`harness:`、写入 async + `metadata.session_id`；新增 `src/pages.js` + 13 条单测；配置 `knowledgePages` 可整体关掉 |
-| 0.6.0 | **维护层**：记忆不只增——`memory_hygiene` 新增 `audit`/`retract`/`restore`/`correct`/`supersede`（维护并入既有工具，工具总数仍 9）；破坏性动作必须 `confirm=true` 且带 `reason`；退役可逆（`restore` 改回 `valid`）；新增 `src/maintenance.js` + 13 条单测；配置 `maintenanceStaleDays`/`maintenanceStuckMinutes`/`maintenanceRequireConfirm`；修 `hygiene.js` 的 `recency()`（此前去重时保留的是扫描序第一条而非最新一条） |
+| 0.6.0 | **记忆维护（不只增）**：记忆必须可维护，否则错事实堆积＝认知错位。维护并入既有工具（工具总数仍 9）：`memory_hygiene` 新增 `audit`/`retract`/`restore`/`correct`/`supersede`；`memory_pages` 新增 `update`/`delete`；`memory_mental_models` 新增 `delete`/`clear`/`dry-run`；破坏性动作必须 `confirm=true`，`retract`/`correct`/`supersede` 还必须带 `reason`（否则不碰服务端）；事实层退役可逆（`restore` 改回 `valid`）；新增 `src/maintenance.js`（纯函数、零 import）+ 14 条单测；配置 `maintenanceStaleDays`/`maintenanceStuckMinutes`/`maintenanceRequireConfirm` |

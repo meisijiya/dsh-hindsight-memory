@@ -242,3 +242,37 @@ test("维护配置字段在 config / schema / ui 三处一致", () => {
 	}
 	assert.ok(ui.includes("维护"), "ui-client 缺少「维护」分组");
 });
+
+test("工具级护栏：破坏性动作缺 confirm / 缺 reason ⇒ 不碰服务端（离线可验）", async () => {
+	const mod = await import("../src/index.js");
+	const registered = new Map();
+	const ctx = {
+		tools: { register: (tool) => registered.set(tool.name, tool) },
+		systemPrompt: { section: () => () => {} },
+		logger: { warn: () => {} },
+		on: () => {},
+		effect: () => {},
+		workingDirectory: { get: () => process.cwd() },
+	};
+	await mod.apply(ctx, {});
+	assert.equal(registered.size, 9, "工具数量必须仍是 9（维护并入既有工具，不新增工具）");
+	const hygiene = registered.get("memory_hygiene");
+	const pages = registered.get("memory_pages");
+	const models = registered.get("memory_mental_models");
+	assert.ok(hygiene && pages && models, "维护动作所在的三个工具必须仍然注册");
+
+	const exec = { agent: { id: "agent-guard", session: { header: { cwd: process.cwd() } } } };
+	const call = async (tool, args) => JSON.parse((await tool.execute(args, exec)).content[0].text);
+
+	const noConfirm = await call(hygiene, { action: "retract", factId: "f1" });
+	assert.equal(noConfirm.ok, false);
+	assert.equal(noConfirm.error, "confirm_required");
+
+	const noReason = await call(hygiene, { action: "retract", factId: "f1", confirm: true });
+	assert.equal(noReason.ok, false);
+	assert.equal(noReason.error, "reason_required");
+
+	assert.equal((await call(pages, { action: "delete", pageId: "p1" })).error, "confirm_required");
+	assert.equal((await call(models, { action: "delete", id: "m1" })).error, "confirm_required");
+	assert.equal((await call(models, { action: "clear", id: "m1" })).error, "confirm_required");
+});
