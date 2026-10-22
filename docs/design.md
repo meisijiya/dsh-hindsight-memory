@@ -514,3 +514,56 @@ dsh plugin --profile web remove dsh-hindsight-memory
   生成 `node_modules/dsh-hindsight-memory -> <profile>/D:/26code/...` 的坏软链，
   随后 DSH 报 `cannot resolve profile bundle "dsh-hindsight-memory"`。走 git 源即可绕开。
 - 市场索引：仓库根 `index.json`（format-1），加到 DSH「插件 → 发现 → 索引源」即可被检索到。
+
+## 19. 面板装载机制与「必须重启」的根因（2026-10-22 排障记录）
+
+**现象**：插件已装载、工具可用、详情页能打开，但**没有「配置」按钮**；
+`GET /plugins/dsh-hindsight-memory/client.js` 返回 404。
+
+**根因链（全部来自 DSH 源码，非猜测）**：
+
+1. 插件配置表单**不会自动渲染**。宿主只在某个 **client 半体**注册了渲染槽位时才提供入口：
+   - `plugins.row.config`，键 = `<包名>#<行 id>`（行 id 取 bundle 的 patch 里写的 `id`）；
+   - `plugins.bundle.config`，键 = `<包名>`（渲染在插件详情页描述与行之间，仅 `view:'page'`）。
+   契约：`dsh-cordis-client-runner/lib/client.js` 的 slot catalog；
+   渲染点：`dsh-client-ui-plugin-manager/lib/client.js:2818`（`renderSlot("plugins.row.config", {view:"page", form}, {entryKey:key})`）。
+   owner props：`{ view:'summary'|'page', form?:{ state:{status,value,base,user,revision,writable}, mutate(ops,expectedRevision) } }`，
+   写操作为 `{op:'set',path:string[],value}` / `{op:'unset',path:string[]}`。
+2. client 半体的存在与否由 `package.json` 的 `dsh.client={platform:'web',inject:[包名…]}` + `exports["./client"]` 决定；
+   服务端 `dsh-client-modules/lib/index.js:722 resolveMeta()` 解析后**写入进程级缓存 `pkgMeta`**，
+   该缓存**没有任何失效入口**（全文件仅 3 处 set / 1 处 get）。
+3. `pkgMeta` 缓存为 `null` 的包不会进入 `sources`，于是 `reconcilePackage()` 无从重建，
+   `/plugins/<包名>/client.js` 永远 404 → 浏览器不加载该 bundle → 没有槽位占用者 → 没有「配置」按钮。
+4. 因此：**磁盘上装好带 client 半体的新版本后，运行中的 DSH 不会重新解析**。
+   重启一次 DSH Web 是唯一可靠路径；反复点插件开关也无效（缓存照样命中）。
+
+**已做的正确动作**：
+
+- 写 client 半体 `src/ui-client.js`（浏览器经典脚本：`window.__ModuleLoader__.load({id, factory})`，factory 内 `require("react")`；
+  宿主 seed 词表含 react / react-dom / zod / `@deepseek-ai/cordis` / client-store / client-ui-slots 等，可直接 require）。
+- 同时注册 `plugins.row.config`（键 `dsh-hindsight-memory#hindsight-memory`）与
+  `plugins.bundle.config`（键 `dsh-hindsight-memory`），两处共用同一表单组件。
+- **不注册 `locale`**：宿主会为本 namespace 解析翻译函数，未向 locale 服务注册过的 namespace 可能在渲染时抛错；
+  组件内文案直接写中文，不依赖 `t`。
+- `exports.inject = ["slots"]`（**服务名**列表，对齐 dsh-mnemon 的 `["slots","sessions",…]`）；
+  `package.json` 的 `dsh.client.inject` 是**包名**列表（对齐 mnemon 的写法）。
+
+**顺带查明的两个事实**：
+
+- 插件管理页的开关操作的是 profile `package.json` 的 `dsh.profile.bundles` 数组（增删包名），
+  即 `setBundleEnabled → selectBundle`；误关后把包名加回数组即可恢复，**依赖不需要重装**。
+- 插件级开关走 `setPluginEnabled → writePluginEnabled(profile, patchId, moduleName, enabled)`，
+  写的是插件行自身的 enabled 状态。
+
+## 20. 本轮（2026-10-22）其它排障记录
+
+- DSH Web 的 401（`dsh web authentication required`）可用自签 cookie 绕过：
+  cookie 名 = `dsh-auth-` + base64url(sha256(authority))，authority = `127.0.0.1:3080`；
+  值 = `v1.<base64url(payload)>.<base64url(HMAC-SHA256(secret, body))>`，
+  secret 取 `~/.dsh/.credentials.yaml` 的 `records.client-connection/browser-session.payload.secret`。
+  ⚠️ HMAC 必须覆盖 **base64url 后的 body 字符串**，不是原始 JSON（我第一次签错就栽在这）。
+- 跨项目隔离结论只认服务端原始数据：模型自称"看到了带 project:xxx 的条目"曾与 API 探针矛盾，
+  最终以 `tags_match=any` 的真值表 + `HINDSIGHT_DEBUG=1` 的 `matchedUntagged/matchedTagged` 计数为准。
+- 插件管理页的 DOM 选择器（便于自动化排查）：
+  卡片 `[data-plugin-package="dsh-hindsight-memory"]`（`data-plugin-status=running|disabled`），
+  标题按钮 `aria-label="查看 dsh-hindsight-memory"`，开关 `button[role="switch"][aria-label="启用 dsh-hindsight-memory"]`。

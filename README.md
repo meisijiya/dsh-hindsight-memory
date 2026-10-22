@@ -72,9 +72,13 @@
 
 | 面板 | 位置 | 能看/能改什么 |
 |---|---|---|
-| **插件管理（配置）** | DSH → 插件 → `dsh-hindsight-memory` → 配置 | 逐项查看并修改插件配置（服务地址、记忆库、作用域、预算、只读/读写、自动召回/留存…）。配置写错**不会炸 profile**——非法输入一律回落到默认值 |
+| **插件管理（配置）** | DSH → 插件 → `dsh-hindsight-memory` → 详情页 →「配置」（插件自带的 client 半体渲染） | 逐项查看并修改插件配置（服务地址、记忆库、作用域、预算、只读/读写、自动召回/留存…）。配置写错**不会炸 profile**——非法输入一律回落到默认值 |
 | **终端状态面板** | `node scripts/panel.mjs` | 服务健康、记忆库清单、**分层条数**（全局层 / 本项目层 / 其它项目层）、最近事实与其标签；项目标签按 omp 同规则自动推导，也可用 `--project <名字>` 覆盖 |
 | **官方前端（最详细）** | <http://127.0.0.1:9999> | Hindsight Control Plane：知识页、实体、关系图、原始事实、库管理 |
+
+> **插件里的「配置」按钮从哪来**：DSH 的插件配置表单**不会自动渲染**。宿主只在某个 client 半体注册了 `plugins.row.config`（键 = `<包名>#<行 id>`）或 `plugins.bundle.config`（键 = `<包名>`）渲染槽位时才给出入口。本插件的 client 半体（`src/ui-client.js`，浏览器经典脚本）同时注册了这两个槽位，所以详情页会出现可编辑表单。
+>
+> ⚠️ **改完 client 半体必须重启 DSH Web**：DSH 进程在启动时解析每个包的 `package.json` 并把结果**缓存在进程内**（不随磁盘变化失效），所以「装了带 client 半体的新版本 → 刷新页面看不到配置按钮」是预期行为，重启一次即可，别去反复点开关。
 
 > 终端面板刻意**不经过模型**：跨 agent 记忆的验收只认服务端原始数据，模型自述不算证据。
 
@@ -150,3 +154,16 @@ node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同�
 - 自动留存是「本回合文本」简化版，未实现 omp 的 full-session 整段重发 + `document_id=sessionId`。
 - DSH 侧**纯全局层读取**需要「整库读 + 客户端过滤」（服务端没有「只取无标签」的表达）。
 - omp 自己**产不出全局层**（它的 retain 恒带 `project:` 标签）；全局层目前只由 DSH 侧不传标签写入。
+
+## 排障（踩过的坑，别重复踩）
+
+| 症状 | 根因 | 处理 |
+|---|---|---|
+| 插件管理页里找不到「配置」按钮 | client 半体没装载：DSH 启动时解析 `package.json` 的 `dsh.client` 并**进程内缓存**，之后改磁盘不会生效 | **重启 DSH Web**（唯一可靠路径） |
+| `GET /plugins/dsh-hindsight-memory/client.js` = 404 | 同上：该包在 client 图里没有记录 | 重启后应 200 |
+| 插件被误关（卡片显示 disabled） | 插件管理页的开关 = 增删 profile `package.json` 里 `dsh.profile.bundles` 数组里的包名 | 手动把包名加回 `dsh.profile.bundles`（依赖本身不需要重装） |
+| 升级后行为没变 | git 依赖不会自动更新 | 在 profile 目录执行 `pnpm update dsh-hindsight-memory --latest` |
+| 终端面板「其它项目层」恒为 0 | 过滤条件把非本项目标签的事实也算成本项目 | 过滤应为「有标签 且 不含本项目标签」 |
+| `node --test test/` 报 MODULE_NOT_FOUND | Windows 上 `test/` 被当成模块路径 | 写 `node --test "test/*.test.js"` |
+| 中文 bank id 报 400 / 建出乱码库 | bash 内联 curl 传中文 body 会坏；URL 需 percent-encode | body 写文件后 `--data-binary @file`；路径用 `urllib.parse.quote` |
+| Hindsight 容器起不来（`Unknown reranker provider: none`） | `none` 不是合法的 reranker provider | 用 `rrf`（直通不重排） |
