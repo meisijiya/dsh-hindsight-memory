@@ -58,7 +58,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/meisijiya/dsh-hindsight-memory",
-            "commit": "03ba3e2b012ed5ab742eb6ab1a73dc962d63ad02"
+            "commit": "b679d2a97d44ccd4c34757883efdc741703140c4"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"
