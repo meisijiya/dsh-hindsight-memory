@@ -1015,3 +1015,29 @@ omp 用官方原生后端，工具面只有事实的增与查；**维护（改 /
 3. **服务端 LLM 预算**：env `HINDSIGHT_API_LLM_TIMEOUT=600`、`HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_TIMEOUT=600`、`HINDSIGHT_API_REFLECT_WALL_TIMEOUT=1800` ⇒ 服务端愿意等 600s。
 
 ⇒ 结论：`dry-run-refresh`（服务端**同步**接口）对大模型必然失败 —— 同步路径无论客户端怎么调都过不去 300s。正确姿势是**异步路径**：`POST /mental-models/{id}/refresh` 立刻返回 `operation_id`，再用 `GET /operations/{id}` 轮询（插件里就是 `memory_mental_models action=refresh` + `memory_operations action=list`）。v0.6.2 已把这个结论写进工具描述与返回 `hint`，避免下次再拿同步接口赌 300s。
+
+## 29. 三层模型：配方 / 事实 / 落后（2026-10-22 定稿）
+
+这是维护能力的**认知骨架**，也是「知识页到底怎么维护」的标准答案。三层各自独立、互不越界——越界就是埋雷。
+
+| 层 | 本质 | 载体字段 | 可写性 | 我们的工具 |
+|---|---|---|---|---|
+| 配方（recipe） | 生成快照的规则本身 | `source_query`（这份快照回答什么问题）、`tags`（**取材范围** scoping，不是 label）、`trigger`（`mode` / `refresh_after_consolidation`）、`max_tokens`、`name` | 人可改 | `memory_pages update`、`memory_mental_models patch`、`memory_initiative capture` |
+| 事实（fact） | 素材本体 | `fact_type`（`world` / `observation` / `experience`）、`tags`（`project:<小写仓库名>`=项目层，无 tag=全局层）、`state`（`valid` / `invalidated`） | 只能经维护动作改 | `memory_retain` 写；`memory_hygiene` 的 `correct` / `retract` / `restore` / `supersede` 改 |
+| 落后（staleness） | 快照与素材的时间差 | `is_stale`、`last_refreshed_at`、`last_refresh_failed_at` | **不可直接改，只能观测 + 触发重算** | `memory_status`、`memory_hygiene action=audit`、`memory_operations` 轮询/重试、`POST /consolidate` |
+
+### 29.1 关键事实：知识页 = 内部 mental model 的外壳
+- 页节点 `kp-635b32386c09469aa848c7adb38592d3` 与其内部模型 `mm-2fea44a3ea224ec095bc33aa241b5d5d` 的 `last_refreshed_at` **同一秒 14:20:02**；`GET /mental-models/{id}` 返回的 `name` / `source_query` / `tags` 与页一致 ⇒ 页是模型在知识页树上的视图，不是另一套存储。
+- 建页那一刻服务端会排一次 `refresh_mental_model`（我们建页返回的 `operation_id=41e2e487` 的 `task_type` 就是它）。
+- 删页会让内部模型成孤儿，后续刷新报 `not found in bank shared`（实测）⇒ **删页不可逆且留孤儿**。
+
+### 29.2 为什么「可维护」不等于「可改正文」
+- `UpdateNodeRequest` 只有 `name` / `parent_id` / `source_query` / `tags` / `max_tokens` / `trigger`，**没有 `body`** ⇒ 服务端在协议层禁止人写正文，正文永远 LLM 合成。
+- 我们补的 `memory_pages update` 改的是**配方**；下次 consolidate 时服务端按新配方重算正文。**手改正文会被下一次 consolidate 整个覆盖**，且等于往模型没见过的记忆里塞事实。
+- 洗账正确顺序：**先洗 bank 事实 → 再 consolidate → 再核对页正文**（`is_stale` 告诉你服务端是否认为它过期）。
+
+### 29.3 闭环
+事实变 → 快照 `is_stale=true` → `consolidate` / `refresh` 按配方从事实层取材 → LLM 合成新正文 → `is_stale=false`。人只碰配方与事实，LLM 只负责合成，落后标记只负责喊「该重做哪几盘」。
+
+### 29.4 踩坑：同 model 已有未终态操作时，新刷新会被抑制
+同一 mental model 若已有 processing/pending 的 refresh，新提交会被**抑制**（不是排队）⇒ 表现为「刷新一直没反应」。排障顺序：先 `GET /operations?limit=100` 找同 model 的未终态行，再决定等还是重试；`GET /operations?limit=300` 会 422（上限 100）。

@@ -336,6 +336,18 @@ Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalid
 
 > 实测提醒：`GET /memories/{id}/history` 目前返回空数组（服务端还没记变更历史），所以「这条记忆什么时候被改的」只能看 `edited_at`；另外 `correct` 会让服务端重新嵌入该事实并**丢弃它派生的 observation**（宁可少一条观察，也不要留一条错的）。
 
+## 三层模型：配方 / 事实 / 落后（维护能力的认知骨架）
+
+| 层 | 是什么 | 谁能动 | 我们的工具 |
+|---|---|---|---|
+| 配方 | 生成快照的规则：`source_query`（回答什么问题）、`tags`（**取材范围**，不是标签）、`trigger`（何时重算）、`max_tokens`、`name` | 人可改，改完下次重算才生效 | `memory_pages update` / `memory_mental_models patch` |
+| 事实 | bank 里的原子条目：`fact_type`（world / observation / experience）、`tags`（`project:<小写名>`=项目层，无 tag=全局层）、`state`（valid / invalidated） | 只能经维护动作改 | `memory_retain` 写；`memory_hygiene` 的 correct・retract・restore・supersede 改 |
+| 落后 | 快照落后于素材的时间差：`is_stale` / `last_refreshed_at` / `last_refresh_failed_at` | 不可直接改，只能观测 + 触发重算 | `memory_status` / `memory_hygiene action=audit` / `memory_operations` / `POST /consolidate` |
+
+**知识页 = 内部 mental model 的外壳**（页与内部模型 `last_refreshed_at` 同秒、字段一致）；**正文永远由服务端 LLM 合成**（`UpdateNodeRequest` 没有 `body` 字段）——所以「可维护」= 配方可改 + 落后可查 + 可删，**不是**「人能改正文」。手改正文会被下一次 consolidate 整个覆盖。
+
+闭环：事实变 → `is_stale=true` → `consolidate` / `refresh` 按配方重算 → 新正文 → `is_stale=false`。删除知识页不可逆，且会让内部 mental model 变孤儿（后续刷新报 not found），慎用。
+
 ## 开发
 
 ```bash
