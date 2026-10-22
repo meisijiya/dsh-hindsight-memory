@@ -28,7 +28,14 @@ for (let i = 2; i < process.argv.length; i += 1) {
 
 const API = (args.get("api") ?? "http://127.0.0.1:8888").replace(/\/+$/, "");
 const BANK = args.get("bank") ?? "shared";
-const PROJECT = (args.get("project") ?? "").toLowerCase();
+/** 项目标签：显式 --project 优先，否则按 omp 同规则自动推导（git 主 checkout 根 basename 小写）。 */
+async function detectProject() {
+	const explicit = args.get("project");
+	if (explicit) return explicit.toLowerCase();
+	const { resolveProjectLabel } = await import("../src/label.js");
+	return await resolveProjectLabel(args.get("dir") ?? process.cwd());
+}
+const PROJECT = await detectProject();
 const PROJECT_TAG = PROJECT ? `project:${PROJECT}` : "";
 const LIMIT = Number(args.get("limit") ?? 500);
 
@@ -82,12 +89,13 @@ async function main() {
 	const projectFacts = PROJECT_TAG
 		? facts.filter((fact) => Array.isArray(fact.tags) && fact.tags.includes(PROJECT_TAG))
 		: [];
+	// 🔴 其它项目层 = 有标签但不是本项目标签的（无标签的已归全局层）。
+	//    早前这里多了一个 `&& !PROJECT_TAG`，导致指定项目时「其它项目层」恒为 0（静默少算）。
 	const foreignFacts = facts.filter(
 		(fact) =>
 			Array.isArray(fact.tags) &&
 			fact.tags.length > 0 &&
-			!fact.tags.includes(PROJECT_TAG) &&
-			!PROJECT_TAG,
+			!(PROJECT_TAG && fact.tags.includes(PROJECT_TAG)),
 	);
 
 	console.log("");

@@ -73,7 +73,7 @@
 | 面板 | 位置 | 能看/能改什么 |
 |---|---|---|
 | **插件管理（配置）** | DSH → 插件 → `dsh-hindsight-memory` → 配置 | 逐项查看并修改插件配置（服务地址、记忆库、作用域、预算、只读/读写、自动召回/留存…）。配置写错**不会炸 profile**——非法输入一律回落到默认值 |
-| **终端状态面板** | `node scripts/panel.mjs` | 服务健康、记忆库清单、**分层条数**（全局层 / 本项目层 / 其它项目层）、最近事实与其标签 |
+| **终端状态面板** | `node scripts/panel.mjs` | 服务健康、记忆库清单、**分层条数**（全局层 / 本项目层 / 其它项目层）、最近事实与其标签；项目标签按 omp 同规则自动推导，也可用 `--project <名字>` 覆盖 |
 | **官方前端（最详细）** | <http://127.0.0.1:9999> | Hindsight Control Plane：知识页、实体、关系图、原始事实、库管理 |
 
 > 终端面板刻意**不经过模型**：跨 agent 记忆的验收只认服务端原始数据，模型自述不算证据。
@@ -113,13 +113,16 @@ dsh plugin --profile web add "file:D:/path/to/dsh-hindsight-memory"
         reflectBudget: low
         maxTokens: 1024
         recallMaxQueryChars: 800
-        autoRecall: false       # 首回合自动召回
-        autoRetain: false       # 回合结束自动留存
+        autoRecall: true        # 首回合自动召回（与 omp 的 autoRecall 默认值一致）
+        autoRetain: true        # 回合结束自动留存（与 omp 的 autoRetain 默认值一致）
         retainEveryNTurns: 3
         sectionOrder: 950
 ```
 
 **配置写错不会炸 profile**：所有非法输入一律回落到默认值（`normalizeConfig` 不抛错）。
+
+> `autoRecall` / `autoRetain` 与 omp 的默认值对齐（都开）。想改成只读或纯手动，在插件配置面板里把
+> `writeEnabled` 或 `autoRetain` 关掉即可，不需要改代码。
 
 ## 缓存稳定性（为什么提示词段是常量）
 
@@ -135,9 +138,9 @@ DSH 把**工具 schema 放进缓存前缀**：工具集合一变 ⇒ 请求头�
 ## 开发
 
 ```bash
-node --test test/               # 18 个单测
+node --test "test/*.test.js"     # 18 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
-node scripts/panel.mjs          # 状态面板
+node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
 ```
 
 ## 已知差异（与 omp 的诚实账）

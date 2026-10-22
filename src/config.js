@@ -34,10 +34,12 @@ export const DEFAULTS = {
 	recallMaxQueryChars: 800,
 	/** 单次召回最大 token。omp 的 recallMaxTokens 默认 1024。 */
 	maxTokens: 1024,
-	/** 自动召回（首轮一次）。 */
-	autoRecall: false,
-	/** 自动留存（回合结束）。 */
-	autoRetain: false,
+	/** 自动召回（首轮一次）。omp 的 hindsight.autoRecall 默认 true ⇒ 保持一致。 */
+	autoRecall: true,
+	/** 自动留存（回合结束）。omp 的 hindsight.autoRetain 默认 true ⇒ 保持一致。
+	 *  注意：本插件的自动留存是「本回合文本」简化版（omp 是整段 session 重发），
+	 *  想完全关掉自动写入：在插件配置里把 writeEnabled 或 autoRetain 置 false 即可。 */
+	autoRetain: true,
 	/** 自动留存的回合间隔。 */
 	retainEveryNTurns: 3,
 	/** 注入段顺序（字面数字）。 */
