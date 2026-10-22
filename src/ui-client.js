@@ -525,12 +525,23 @@ window.__ModuleLoader__.load({
 		 * @param {any} ctx 浏览器端插件上下文。
 		 */
 		function apply(ctx) {
+			// 行级配置页：插件包名 # bundle 里声明的行 id。
 			ctx.slots.inject("plugins.row.config", () =>
 				ctx.slots.register(
 					{
 						name: "plugins.row.config",
 						key: "dsh-hindsight-memory#hindsight-memory",
-						locale: "hindsightMemory",
+						inject: () => ({}),
+					},
+					HindsightMemoryConfig,
+				),
+			);
+			// 包级配置页：渲染在插件详情页的描述与行之间（仅 page 视图）。
+			ctx.slots.inject("plugins.bundle.config", () =>
+				ctx.slots.register(
+					{
+						name: "plugins.bundle.config",
+						key: "dsh-hindsight-memory",
 						inject: () => ({}),
 					},
 					HindsightMemoryConfig,
