@@ -60,6 +60,7 @@
 	"scripts": {
 		"test": "node --test \"test/*.test.js\"",
 		"panel": "node scripts/panel.mjs",
-		"verify:live": "node scripts/verify-live.mjs"
+		"verify:live": "node scripts/verify-live.mjs",
+		"verify:market-index": "node scripts/validate-market-index.mjs"
 	}
 }

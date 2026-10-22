@@ -53,12 +53,36 @@
       },
       "versions": [
         {
-          "version": "0.2.0",
-          "publishTimestamp": 1792651146,
+          "version": "0.3.1",
+          "publishTimestamp": 1792652881,
           "source": {
             "type": "git",
             "url": "https://github.com/meisijiya/dsh-hindsight-memory",
-            "commit": "7eb09bb"
+            "commit": "1d8a1175e879d75777fd734cdce00351faae9abe"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+          }
+        },
+        {
+          "version": "0.3.0",
+          "publishTimestamp": 1792652446,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/meisijiya/dsh-hindsight-memory",
+            "commit": "7602106d0afc12049651821c150f6c6ec01961b1"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+          }
+        },
+        {
+          "version": "0.2.0",
+          "publishTimestamp": 1792651132,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/meisijiya/dsh-hindsight-memory",
+            "commit": "7eb09bb54df95c86b05f06ce9c53cd6f025bf96c"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"

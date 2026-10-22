@@ -99,6 +99,14 @@ dsh plugin --profile web add "file:D:/path/to/dsh-hindsight-memory"
 
 > 需要**重启 DSH Web** 才会装载。回滚：`dsh plugin --profile web remove dsh-hindsight-memory`。
 
+**从插件市场发现页装**：DSH → 插件 → 发现 → 索引源，填本仓库的索引地址：
+
+```
+https://raw.githubusercontent.com/meisijiya/dsh-hindsight-memory/main/index.json
+```
+
+索引里锁的是**精确 commit**（不是浮动 HEAD）；改索引只要重新拉取，不用重启 DSH。索引格式与发布流程见 `docs/market-index.md`。
+
 包声明了 `dsh.bundle.patch`，走 bundle 路线，profile 装载时自动组合插件自己的 `cordis.patch.yml`。
 
 ## 配置
@@ -223,7 +231,8 @@ node scripts/hygiene.mjs --consolidate
 ## 开发
 
 ```bash
-node --test "test/*.test.js"     # 28 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node --test "test/*.test.js"     # 41 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
+node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
 node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
 node scripts/hygiene.mjs        # 记忆卫生（默认只读预览；--apply 才作废，--consolidate 顺带合并）
@@ -252,6 +261,7 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 | Hindsight 容器起不来（`Unknown reranker provider: none`） | `none` 不是合法的 reranker provider | 用 `rrf`（直通不重排） |
 | 启动日志出现 `failed to import: ReferenceError: Config is not defined` | `export { LiveConfig as Config }` 只是**再导出**，模块作用域里没有 `Config` 绑定，默认导出里引用它就炸 | v0.3.1 已修：默认导出写 `Config: LiveConfig`；并加了 `test/entry.test.js` 钉住"入口必须能被 import" |
 | 启动日志 `dsh: warning: N entry did not activate` | 该插件行加载失败 ⇒ 整行静默不生效（功能全没了但没有报错弹窗） | 看同一条日志里的 `failed to import:` 原文，它才是真线索 |
+| 插件在「插件 → 发现」里整个不见了 | 索引里 `source.commit` 写了 7 位短 sha ⇒ 宿主要求 40 位小写 hex，整份索引被拒 | `node scripts/validate-market-index.mjs` 按 FAIL 项修；详见 `docs/market-index.md` |
 | 想验证插件在宿主里的真实加载情况 | 不能重启正在服务当前会话的 DSH 实例 | 用 `dsh headless --patch <overlay>.yml "…"` 旁路验证；注意 `dsh --profile web` 起的第二实例会和用户实例抢 3080/3081 端口 |
 
 ## 版本沿革
