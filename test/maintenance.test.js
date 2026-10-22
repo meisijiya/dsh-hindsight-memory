@@ -305,4 +305,15 @@ test("observation 不可策展的报错能被识别，并指出该改哪几条�
 	assert.equal(described[0].text, "源事实一");
 	assert.deepEqual(described[1].tags, []);
 	assert.deepEqual(describeSources(facts, []), [], "没有源事实时返回空数组");
+
+	// 回归：调用方直接传服务端分页信封（listFacts 返回 {items:[...]}）时不能炸。
+	// 曾因此让 observation_not_curatable 分支在活体里退化成 "(facts ?? []) is not iterable"。
+	const envelope = { items: facts, total: facts.length, limit: 500, offset: 0 };
+	assert.deepEqual(
+		describeSources(envelope, ["s1"]).map((entry) => entry.id),
+		["s1"],
+		"分页信封也要能取出源事实",
+	);
+	assert.deepEqual(describeSources({ memories: facts }, ["s2"]).map((entry) => entry.id), ["s2"]);
+	assert.deepEqual(describeSources(null, ["s1"]), [], "没有事实列表时返回空数组");
 });

@@ -5,6 +5,13 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.6.5 — 修 observation 提示在活体里失效（分页信封当数组用）
+
+- 现象（活体复现）：`memory_hygiene action=correct` 打派生 observation 时，报的不是可操作提示，而是 `整理失败：(facts ?? []) is not iterable`。
+- 根因：`client.listFacts()` 返回的是服务端分页信封 `{items:[...], total, limit, offset}`，而 `describeSources()` 按数组遍历 ⇒ 一旦走到 observation 分支就抛 TypeError，v0.6.4 的结构化提示在真实环境**从未生效**（单测用的是摊平数组，没暴露）。
+- 修复：`describeSources()` 兼容数组 / `{items:[...]}` / `{memories:[...]}` 三种形状，缺列表时返回空数组；补 1 条回归测试（92 → 93 条）。
+- 结论记录：这类"调用方形状不一致"的缺陷单测覆盖不到，**必须做活体验收**。v0.6.4 的新提示在活体里首次验证通过。
+
 ## 0.6.4 — observation 不可策展时给出可操作提示（附带源事实 id）
 
 - 现场：`memory_hygiene action=correct` 打服务端直接回 `Hindsight HTTP 400: Memory 'xxx' is a observation; only world/experience facts can be curated.` —— 服务端只允许策展 world/experience，observation 是派生事实，改它没意义（会在下次 consolidation 重新派生）。旧版把这段原始 400 原样抛给使用者，看不出下一步该干什么。

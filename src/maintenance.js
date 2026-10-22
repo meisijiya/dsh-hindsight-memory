@@ -619,8 +619,10 @@ export function isObservationCurationError(message) {
 export function describeSources(facts, sourceIds, { limit = 8, textLength = 200 } = {}) {
 	const wanted = new Set((sourceIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean));
 	if (!wanted.size) return [];
+	// 调用方可能直接传服务端分页信封（{items:[...]}），也可能传已摊平的数组。
+	const list = Array.isArray(facts) ? facts : (facts?.items ?? facts?.memories ?? []);
 	const out = [];
-	for (const fact of facts ?? []) {
+	for (const fact of list) {
 		const id = String(fact?.id ?? "").trim();
 		if (!wanted.has(id)) continue;
 		out.push({
