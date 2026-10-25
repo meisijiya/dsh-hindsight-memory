@@ -71,6 +71,35 @@ test("planPrune 保留最新的一条", () => {
 	assert.equal(plan.invalidate[0].id, "old");
 });
 
+test("planPrune：服务端事实没有 updated_at 时按 mentioned_at 判新旧", () => {
+	const groups = [
+		{
+			signature: "project:x",
+			members: [
+				{ id: "old", text: "t", mentioned_at: "2026-10-21T00:00:00Z" },
+				{ id: "new", text: "t", mentioned_at: "2026-10-22T00:00:00Z" },
+			],
+		},
+	];
+	const plan = planPrune(groups);
+	assert.equal(plan.keep[0].id, "new");
+	assert.equal(plan.invalidate[0].id, "old");
+});
+
+test("planPrune：只有 date 字段时也能分出新旧", () => {
+	const groups = [
+		{
+			signature: "project:x",
+			members: [
+				{ id: "old", text: "t", date: "2026-10-21T00:00:00Z" },
+				{ id: "new", text: "t", date: "2026-10-22T00:00:00Z" },
+			],
+		},
+	];
+	const plan = planPrune(groups);
+	assert.equal(plan.keep[0].id, "new");
+});
+
 test("summarizeGroups 输出可读摘要", () => {
 	const summary = summarizeGroups([
 		{ signature: "project:x", members: [{ id: "1", text: "hello world" }] },

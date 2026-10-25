@@ -269,6 +269,10 @@ Hindsight 的抽取/刷新/合并任务都进 `operations` 队列，**失败不�
 # 插件工具：memory_operations(action=list|retry|delete)
 ```
 
+`action=delete` 是「**先取消、再真删**」两步：服务端的 `DELETE /operations/{id}` 只取消
+（任务已是终态时返回 409），真删要走 `DELETE /operations/{id}/delete`。
+所以 pending/processing 的行会先被推到终态再删掉，completed/failed 的行直接删。
+
 `memory_status` 里已经带了队列体检：按状态/任务类型统计 + 最近任务的 `error` 与 `retryCount`。
 实测：`total 248 / processing 8 / completed 11 / failed 1`，那条 failed 是探针 mental model 被删后
 遗留的 `refresh_mental_model`（`ValueError: Mental model probe-mm-测试 not found`）。
@@ -371,6 +375,8 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 - 精神模型：DSH 与 omp 各建各的（id 前缀不同、互不覆盖）；**DSH 侧不会去改 omp 建的模型**。
 - mental model 刷新要能跑完，得同时放宽服务端三个超时（`REFLECT_WALL_TIMEOUT` / `LLM_TIMEOUT` / worker 存活），
   客户端改不了；本机已把服务端超时放宽（1800/600/600）。
+- 服务端版本：插件对齐 Hindsight **1.0 与 1.1**（两版的 MCP 工具面与 REST 契约一致，`recall` 只多可选参数），
+  所以升级服务端不需要改插件；反过来插件也不挑服务端小版本。
 
 ## 排障（踩过的坑，别重复踩）
 
@@ -393,6 +399,7 @@ node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录> 
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.2 | **对齐 Hindsight 1.1 的服务端语义**：`memory_operations action=delete` 改为「先取消再真删」（服务端 `DELETE /operations/{id}` 是取消、`/operations/{id}/delete` 才是真删，原来只打前者 ⇒ 僵尸行没被清掉）；看板文档数改从 `/stats` 的 `total_documents` 取（bank 列表项本来就没有 `document_count` ⇒ 恒显示 0 份文档）；事实新旧排序的回退链补上服务端真实字段（`mentioned_at`/`date`/`occurred_start`，服务端**没有** `created_at`）。工具名与配置键未变 |
 | 0.7.1 | **修看板通道注册失败**：宿主 `connection.rpc.handle()` 内部要访问 `owner.webServer`，而 `scope.get("connection")` 拿到的是解析不到 webServer 的实例 ⇒ 注册抛 `cannot get property "webServer" without inject`（表现为通道 405）。改为 **root 优先**（与 dsh-rewind-plugin 一致），并补一条回归单测；另补进程 cwd 的兜底项目标签，避免无会话时分层全落到「其它项目层」 |
 | 0.7.0 | **插件详情页记忆看板（只读）**：服务端在宿主 `connection.rpc` 通道上注册 `/dsh-hindsight-memory`（7 个只读端点：overview/layers/audit/operations/models/pages/config），client 半体注册 `plugins.detail.section` 席位渲染看板。取数走服务端代理（Hindsight 无 CORS，浏览器不能直连）。**看板只读**：写操作仍必须走记忆工具的 confirm+reason 护栏 |
 | 0.1.0 | 首个可运行版本：四个封装工具 + omp 契约对齐（盖章/过滤/预算/异步语义） |

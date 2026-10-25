@@ -72,13 +72,20 @@ export function dupSignature(fact) {
 /** 事实的新旧排序依据（越新越靠前）。 */
 function recency(fact) {
 	// 成员对象由 findDuplicateGroups 产出，用驼峰键；服务端原对象用下划线键。
+	// 服务端 MemoryUnitListItem 没有 created_at，只有 updated_at / mentioned_at /
+	// date / occurred_start —— 把 created_at 排在前面等于永远取不到值，
+	// 结果同一组里的新旧顺序退化成原始顺序（保留的可能是最旧那条）。
 	const raw =
 		fact?.updated_at ??
 		fact?.updatedAt ??
+		fact?.mentioned_at ??
+		fact?.mentionedAt ??
+		fact?.date ??
+		fact?.occurred_start ??
+		fact?.stored_at ??
 		fact?.created_at ??
 		fact?.createdAt ??
 		fact?.timestamp ??
-		fact?.stored_at ??
 		"";
 	const value = typeof raw === "number" ? raw : Date.parse(String(raw));
 	return Number.isFinite(value) ? value : 0;

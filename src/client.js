@@ -248,6 +248,18 @@ export class HindsightMemoryClient {
 			if (target) {
 				out.factCount = target?.fact_count ?? null;
 				out.documentCount = target?.document_count ?? null;
+				// 1.0/1.1 的 bank 列表项只有 fact_count，没有 document_count；
+				// 文档数只在 /stats（total_documents）里。不补这一刀，看板永远显示「0 份文档」。
+				if (out.documentCount === null) {
+					try {
+						const stats = await this.bankStats({ signal });
+						const total = stats?.total_documents ?? stats?.document_count ?? null;
+						const count = Number(total);
+						out.documentCount = total !== null && Number.isFinite(count) ? count : null;
+					} catch (error) {
+						out.warnings.push(`读取 bank 统计失败，文档数未知：${error?.message ?? error}`);
+					}
+				}
 			} else {
 				out.warnings.push(
 					`bank "${this.bankId}" 不在服务端 bank 列表里（现有：${list
@@ -432,13 +444,28 @@ export class HindsightMemoryClient {
 		);
 	}
 
-	/** 删除一个 operation（真删；报告 §10 用它清僵尸 pending 行）。 */
+	/**
+	 * 删掉一个 operation 记录（报告 §10 用它清僵尸 pending 行）。
+	 *
+	 * 服务端两条 DELETE 路由语义不同（1.1.0 实机核对）：
+	 *   - `DELETE /operations/{id}`        → **取消**；任务已是终态时返回 409
+	 *     （"only 'pending' and 'processing' operations can be cancelled"），行还在。
+	 *   - `DELETE /operations/{id}/delete` → **真删记录**；要求任务已终态。
+	 * 所以「清僵尸」必须两步：先取消（把 pending/processing 推到终态）再真删。
+	 */
 	async deleteOperation(operationId, { signal } = {}) {
-		const response = await this.fetchWithTimeout(
-			`/v1/default/banks/${encodeSegment(this.bankId)}/operations/${encodeSegment(operationId)}`,
-			{ method: "DELETE", signal, timeoutMs: this.config.retainTimeoutMs },
-		);
-		return this.parse(response);
+		const base = `/v1/default/banks/${encodeSegment(this.bankId)}/operations/${encodeSegment(operationId)}`;
+		const out = { operationId, cancelled: false, deleted: false, cancelError: null };
+		try {
+			await this.deleteJson(base, { signal, timeoutMs: this.config.retainTimeoutMs });
+			out.cancelled = true;
+		} catch (error) {
+			// 409 = 已终态，无需取消，直接真删；其它错误也不阻断真删尝试。
+			out.cancelError = error?.message ?? String(error);
+		}
+		await this.deleteJson(`${base}/delete`, { signal, timeoutMs: this.config.retainTimeoutMs });
+		out.deleted = true;
+		return out;
 	}
 
 	/** bank 统计（total_nodes / pending_operations / failed_operations …）。 */
