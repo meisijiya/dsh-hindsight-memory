@@ -12,6 +12,8 @@
 - 修看板「0 份文档」：`/v1/default/banks` 的 bank 列表项**没有 document_count**（只有 fact_count），文档数只在 `/stats` 的 `total_documents` 里 ⇒ 面板恒显示 0 份文档。bank 概览现在在列表没给文档数时补打一次 `/stats`（列表若已带该字段则不补打），取不到只告警、不让概览整体失败。
 - 修事实新旧排序：`recency()` 的回退链把 `created_at` 排在前面，而服务端 `MemoryUnitListItem` **没有 created_at**（只有 `updated_at` / `mentioned_at` / `date` / `occurred_start`）⇒ 没有 updated_at 的事实全部取到 0，同组里「保留最新一条」退化成原始顺序（可能保留最旧那条）。回退链改为 `mentioned_at` → `date` → `occurred_start` 优先。
 - 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增；`memory_operations action=delete` 的返回体在原有字段之外新增 `cancelled` / `deleted` / `cancelError`。
+- 兼容矩阵（本版本对两版服务端都成立，不要求先升 Hindsight）：`DELETE /v1/default/banks/{bank_id}/operations/{operation_id}/delete`（真删）与 `GET /v1/default/banks/{bank_id}/stats` 的 `total_documents` 在 **Hindsight 1.0.0 与 1.1.0 里都存在**（逐行核对两版 `api/http.py` 的路由与响应模型），所以这三条修复不引入「必须先升服务端」的新门槛。1.0.0 → 1.1.0 的破坏性面在**数据库迁移**（前向、不可回滚），不在 HTTP 契约。
+- 装载提示：DSH 在启动时解析并缓存每个包的 `package.json`，装了 0.7.2 之后**必须重启 DSH Web** 才装载新代码（与 README 的既有说明一致）。
 
 ## 0.7.1 — 修看板通道注册失败（取 connection 必须 root 优先）
 
