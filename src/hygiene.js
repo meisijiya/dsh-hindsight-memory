@@ -82,6 +82,7 @@ function recency(fact) {
 		fact?.mentionedAt ??
 		fact?.date ??
 		fact?.occurred_start ??
+		fact?.occurredStart ??
 		fact?.stored_at ??
 		fact?.created_at ??
 		fact?.createdAt ??
@@ -156,7 +157,13 @@ export function findDuplicateGroups(
 						tags: Array.isArray(fact?.tags) ? fact.tags : [],
 						factType: factType(fact),
 						createdAt: fact?.created_at ?? fact?.stored_at ?? null,
-					updatedAt: fact?.updated_at ?? null,
+						updatedAt: fact?.updated_at ?? null,
+						// 服务端 MemoryUnitListItem 没有 created_at，只有 updated_at /
+						// mentioned_at / date / occurred_start。不带出来的话 recency()
+						// 的回退链在这些成员上全部落空，"保留最新一条"会退化成原始顺序。
+						mentionedAt: fact?.mentioned_at ?? null,
+						date: fact?.date ?? null,
+						occurredStart: fact?.occurred_start ?? null,
 						context: fact?.context ?? null,
 					})),
 				});

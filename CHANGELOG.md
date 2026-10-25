@@ -5,6 +5,14 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.7.3 — 让"事实新旧排序"真正生效（0.7.2 那条修复是空转）
+
+- 问题：0.7.2 把 `recency()` 的回退链改成 `mentioned_at` → `date` → `occurred_start` 优先，但 `findDuplicateGroups` 产出的成员对象只带出 `createdAt` / `updatedAt` 两个时间字段 ⇒ 新增的分支在真实链路上**永远取不到值**，没有 `updated_at` 的事实仍全部算成 0，「保留最新一条」依旧退化成原始顺序。配套的两条测试又直接手工构造了 `findDuplicateGroups` 不会产出的成员形状（把 `mentioned_at` 直接挂在 member 上），于是测试是绿的、修复是空的。
+- 修：`findDuplicateGroups` 的成员映射补出 `mentionedAt` / `date` / `occurredStart`（服务端 `MemoryUnitListItem` 真实字段是 `updated_at` / `mentioned_at` / `date` / `occurred_start`，**没有 `created_at`**），`recency()` 同时认 `occurred_start` 与 `occurredStart`。
+- 修测试：三条 `planPrune` 用例改为走真实链路（`findDuplicateGroups` → `planPrune`），用服务端形状的事实断言「保留的是最新那条」。修复前这两条用例失败（keep 拿到的是最旧那条），修复后通过。
+- 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增，返回体无新增字段。
+- 0.7.2 的另两条修复（`memory_operations action=delete` 走真删路由、看板文档数取 `/stats.total_documents`）经复核**不受影响，仍然有效**。
+
 ## 0.7.2 — 对齐 Hindsight 1.1 的服务端语义（operation 真删、文档数取 /stats、事实新旧排序）
 
 - 背景：本机 Hindsight 从 1.0.0 升到 1.1.0。两版的 MCP 工具面与 REST 契约一致（`recall` 只多可选参数、`tags_match` 由字符串收窄为枚举、`prefer_observations` 改为可继承 bank 配置），**插件不需要为升级改任何代码**。这次升级把三处一直存在的老错用实机核对钉出来了。

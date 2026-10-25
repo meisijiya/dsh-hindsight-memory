@@ -54,16 +54,13 @@ test("findDuplicateGroups：跨层同文不进重复组，落到 crossScope", ()
 	assert.equal(crossScope.length, 1);
 });
 
-test("planPrune 保留最新的一条", () => {
-	const groups = [
-		{
-			signature: "project:x",
-			members: [
-				{ id: "old", text: "t", updated_at: "2026-10-21T00:00:00Z" },
-				{ id: "new", text: "t", updated_at: "2026-10-22T00:00:00Z" },
-			],
-		},
+test("planPrune 保留最新的一条（走 findDuplicateGroups 的真实成员形状）", () => {
+	const facts = [
+		{ id: "old", text: "同一条事实", fact_type: "world", tags: ["project:x"], updated_at: "2026-10-21T00:00:00Z" },
+		{ id: "new", text: "同一条事实", fact_type: "world", tags: ["project:x"], updated_at: "2026-10-22T00:00:00Z" },
 	];
+	const { groups } = findDuplicateGroups(facts, { threshold: 0.9 });
+	assert.equal(groups.length, 1);
 	const plan = planPrune(groups);
 	assert.equal(plan.keep.length, 1);
 	assert.equal(plan.keep[0].id, "new");
@@ -72,30 +69,24 @@ test("planPrune 保留最新的一条", () => {
 });
 
 test("planPrune：服务端事实没有 updated_at 时按 mentioned_at 判新旧", () => {
-	const groups = [
-		{
-			signature: "project:x",
-			members: [
-				{ id: "old", text: "t", mentioned_at: "2026-10-21T00:00:00Z" },
-				{ id: "new", text: "t", mentioned_at: "2026-10-22T00:00:00Z" },
-			],
-		},
+	const facts = [
+		{ id: "old", text: "只有提及时间", fact_type: "world", tags: ["project:x"], mentioned_at: "2026-10-21T00:00:00Z" },
+		{ id: "new", text: "只有提及时间", fact_type: "world", tags: ["project:x"], mentioned_at: "2026-10-22T00:00:00Z" },
 	];
+	const { groups } = findDuplicateGroups(facts, { threshold: 0.9 });
+	assert.equal(groups.length, 1);
 	const plan = planPrune(groups);
 	assert.equal(plan.keep[0].id, "new");
 	assert.equal(plan.invalidate[0].id, "old");
 });
 
 test("planPrune：只有 date 字段时也能分出新旧", () => {
-	const groups = [
-		{
-			signature: "project:x",
-			members: [
-				{ id: "old", text: "t", date: "2026-10-21T00:00:00Z" },
-				{ id: "new", text: "t", date: "2026-10-22T00:00:00Z" },
-			],
-		},
+	const facts = [
+		{ id: "old", text: "只有事件日期", fact_type: "world", tags: ["project:y"], date: "2026-10-21T00:00:00Z" },
+		{ id: "new", text: "只有事件日期", fact_type: "world", tags: ["project:y"], date: "2026-10-22T00:00:00Z" },
 	];
+	const { groups } = findDuplicateGroups(facts, { threshold: 0.9 });
+	assert.equal(groups.length, 1);
 	const plan = planPrune(groups);
 	assert.equal(plan.keep[0].id, "new");
 });
