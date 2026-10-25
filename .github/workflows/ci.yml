@@ -91,6 +91,11 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 索引校验要确认 source.commit 指向的提交**在本仓库存在**，
+          # 而 actions/checkout 默认是 depth=1 的浅克隆 —— 历史提交根本不在本地，
+          # 于是所有版本条目（含 0.7.1 等早已发布的）都会被判「不存在」而红。
+          fetch-depth: 0
 
       - name: 准备 Node 22
         uses: actions/setup-node@v4
