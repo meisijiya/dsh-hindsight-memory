@@ -239,28 +239,47 @@ node scripts/hygiene.mjs --consolidate
 
 ## 精神模型（mental models）：跨会话的经验总结
 
-omp 在启动时会幂等建三个 mental model（本插件对齐了同样的三件套）：
+精神模型是 Hindsight 的第三层记忆：**服务端用 LLM 从事实层归纳出的一份长期画像文档**，
+客户端负责确保它存在、并把正文注入会话提示。omp 启动时幂等建三个，本插件对齐同样的三件套：
 
 | 模型 | 标签 | 作用 |
 |---|---|---|
-| `dsh-user-preferences` | **无标签**（全局层，所有项目可见） | 用户的长期偏好 |
-| `dsh-project-conventions-<完整项目名>` | `project:<项目名小写>` | 本项目的约定 |
-| `dsh-project-decisions-<完整项目名>` | `project:<项目名小写>` | 本项目的决策 |
+| `user-preferences` | **无标签**（全局层，所有项目可见） | 用户的长期偏好 |
+| `project-conventions` | 项目层 | 本项目的约定 |
+| `project-decisions` | 项目层 | 本项目的决策 |
 
-**为什么 id 要带前缀 + 完整项目名**：omp 的 id 规则是「只保留 ASCII 字母数字」，
-所以纯中文项目名在 omp 侧会全部退化成 `project-conventions-project`——多个中文项目会抢同一个模型，
-实测其中一个还带着别的项目的标签。DSH 侧改用 `dsh-` 前缀 + **完整中文项目名**，
-服务端不强制 id 只能 ASCII（实测中文 id 创建成功），这样 DSH 与 omp 的模型**互不覆盖**。
+**id 与 omp 完全相同 ⇒ 两端共用同一份模型**（2026-10-27 起）。
+id 规则随作用域变化，与 omp 逐字对齐：
+
+| 作用域 | id 形态 | 理由 |
+|---|---|---|
+| `per-project` / `global` | 裸 id（`project-conventions`） | bank 已按项目隔离（或全局唯一），id 不需要再带项目名 |
+| `per-project-tagged` | 裸 id + 项目 slug 后缀（`project-conventions-blog`） | 单 bank 标签分栏，需要在 id 里区分项目 |
+
+> 🔴 **为什么必须两端同名**：omp 注入精神模型时**只按 scope 过滤、不按 id 过滤**
+> （`loadMentalModelsBlock` 传的是 `recallTags`；`per-project` 下为空 ⇒ **bank 里每个模型都注入**）。
+> 两端各建一份同语义模型 ⇒ 上下文里出现两份「Project Conventions」，
+> 并把渲染预算（`hindsight.mentalModelMaxRenderChars`，默认 16000 字符）吃光、
+> 触发 `[mental-model snapshot truncated at render budget]`。
+> 实测（切换前）：同一 bank 里 7 个模型被注入，标题「Project Conventions」出现两次。
+> 统一后：4 个模型、无重复。
+>
+> 本插件的注入过滤也改成与 omp 同规则（`parity.js` 的 `mentalModelVisible()`：**只按 scope 过滤，不按 id 白名单**），
+> 否则自定义模型（例如手写的架构文档）在一端可见、另一端不可见。
 
 > ⚠️ 服务端 `POST /mental-models` 是**仅创建**：重复 id 返 `409` 且**不改写已有 tags**。
 > 所以插件的做法是「缺就建、标签不对就 PATCH、对的就原样保留」——`planEnsure()` 干这件事。
+> 两端同时启动时，第二个端拿到 409 就跳过（模型已存在且就是它要的那份）⇒ 不会互相覆盖。
 
 ```bash
 # 插件工具：memory_mental_models(action=ensure|list|content|refresh|patch)
 ```
 
-**实测（2026-10-22，bank `shared`）**：`ensure` 返回 `created:0 patched:0 kept:3`，
-三个模型齐全，`dsh-user-preferences` 标签为空（全局层）、两个项目模型带 `project:随便问问`。
+**实测（2026-10-27，`per-project` 作用域）**：`ensure` 返回 `created:0 patched:0 kept:3`，
+三个模型齐全且与 omp 侧同名；同一 bank 内不再有 `dsh-` 前缀的副本。
+
+> `mentalModelPrefix` 配置项保留为**可选隔离层**：默认空 = 与 omp 完全同名；
+> 填值（如 `dsh`）就在 omp 的 id 前再加一层，用于「同一 bank 内两端必须用不同模型」的特殊场景。
 
 ## 运维观测：失败任务不会自动重试
 

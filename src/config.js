@@ -84,8 +84,12 @@ export const DEFAULTS = {
 	mentalModels: true,
 	/** 是否把 mental model 正文注入会话（与 omp 的注入行为对齐）。 */
 	injectMentalModels: true,
-	/** mental model id 前缀。与 omp 的 id 空间分开，避免 409 与 tags 抢写。 */
-	mentalModelPrefix: "dsh",
+	/**
+	 * mental model id 前缀。**默认空** = 与 omp 用完全相同的 id（两端共用同一份模型）。
+	 * 填值（如 `dsh`）会在 omp 的 id 前再加一层，用于「同一 bank 内两端必须用不同模型」
+	 * 的特殊场景。日常不需要填。
+	 */
+	mentalModelPrefix: "",
 	/** 全局 mental model（user-preferences）的最大 token。 */
 	mentalModelUserMaxTokens: 600,
 	/** 项目级 mental model（conventions / decisions）的最大 token。 */

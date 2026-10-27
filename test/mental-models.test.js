@@ -10,27 +10,38 @@ import {
 import { describeLayers, filterByScope } from "../src/hygiene.js";
 import { renderMentalModelMessage } from "../src/prompt.js";
 
-const CONFIG = { mentalModelPrefix: "dsh", mentalModelUserMaxTokens: 600, mentalModelProjectMaxTokens: 800 };
+const CONFIG = { scoping: "per-project", mentalModelUserMaxTokens: 600, mentalModelProjectMaxTokens: 800 };
 
-test("mental model id 用完整项目名，中文项目名不会退化到同一个 id", () => {
-	const a = mentalModelIds(CONFIG, "随便问问");
-	const b = mentalModelIds(CONFIG, "另一个中文项目");
-	assert.notEqual(a.conventions, b.conventions);
-	assert.ok(a.conventions.includes("随便问问"), "必须保留完整中文项目名");
-	assert.notEqual(a.conventions, "project-conventions-project");
+test("per-project 作用域下 id 与 omp 完全相同（两端共用同一份模型）", () => {
+	const ids = mentalModelIds(CONFIG, "随便问问");
+	assert.equal(ids.user, "user-preferences");
+	assert.equal(ids.conventions, "project-conventions");
+	assert.equal(ids.decisions, "project-decisions");
 });
 
-test("mental model id 与 omp 的 id 空间分开（避免 409 与 tags 抢写）", () => {
-	const ids = mentalModelIds(CONFIG, "blog");
-	assert.equal(ids.user, "dsh-user-preferences");
-	assert.equal(ids.conventions, "dsh-project-conventions-blog");
-	assert.equal(ids.decisions, "dsh-project-decisions-blog");
-	assert.notEqual(ids.user, "user-preferences");
+test("per-project-tagged 作用域下 id 带项目 slug 后缀（与 omp 同规则）", () => {
+	const ids = mentalModelIds({ ...CONFIG, scoping: "per-project-tagged" }, "blog");
+	assert.equal(ids.user, "user-preferences");
+	assert.equal(ids.conventions, "project-conventions-blog");
+	assert.equal(ids.decisions, "project-decisions-blog");
 });
 
-test("前缀非法字符被清洗；全空时回落 dsh", () => {
-	const ids = mentalModelIds({ mentalModelPrefix: "  *** " }, "x");
+test("per-project-tagged 下中文项目名按 omp 的 slug 规则退化（与 omp 一致，不额外造 id）", () => {
+	const ids = mentalModelIds({ ...CONFIG, scoping: "per-project-tagged" }, "随便问问");
+	// omp 的 slug 只保留 ASCII ⇒ 中文名退化成 "project"；两端必须一致地退化，
+	// 否则同一 bank 里会出现两份同语义模型、把注入预算吃光。
+	assert.equal(ids.conventions, "project-conventions-project");
+});
+
+test("mentalModelPrefix 仍是可选隔离层：填值就在 omp 的 id 前再加一层", () => {
+	const ids = mentalModelIds({ ...CONFIG, mentalModelPrefix: "dsh" }, "blog");
 	assert.equal(ids.user, "dsh-user-preferences");
+	assert.equal(ids.conventions, "dsh-project-conventions");
+});
+
+test("前缀非法字符被清洗；全空时等于不加前缀", () => {
+	const ids = mentalModelIds({ ...CONFIG, mentalModelPrefix: "  *** " }, "x");
+	assert.equal(ids.user, "user-preferences");
 });
 
 test("三个 mental model 的规格：全局无 tag，项目层带 project 标签，触发器是 delta", () => {
@@ -46,8 +57,15 @@ test("三个 mental model 的规格：全局无 tag，项目层带 project 标�
 	}
 });
 
+test("per-project 作用域下项目模型不带 tag（bank 已隔离，与 omp 的 tags 计算一致）", () => {
+	const specs = mentalModelSpecs(CONFIG, "随便问问", []);
+	assert.equal(specs[0].tags, undefined);
+	assert.equal(specs[1].tags, undefined);
+	assert.equal(specs[2].tags, undefined);
+});
+
 test("planEnsure：缺的建、标签不符的改标签、对的不动", () => {
-	const specs = mentalModelSpecs(CONFIG, "blog", ["project:blog"]);
+	const specs = mentalModelSpecs({ ...CONFIG, scoping: "per-project-tagged" }, "blog", ["project:blog"]);
 	const existing = [
 		{ id: specs[0].id, tags: [] },
 		{ id: specs[1].id, tags: ["project:other"] },

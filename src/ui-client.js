@@ -277,8 +277,8 @@ window.__ModuleLoader__.load({
 				key: "mentalModelPrefix",
 				label: "模型 id 前缀",
 				type: "text",
-				default: "dsh",
-				doc: "与 omp 的 id 空间分开，避免 409 冲突与 tags 抢写。",
+				default: "",
+				doc: "默认空 = 与 omp 用完全相同的 id，两端共用同一份模型（推荐）。填值会在 omp 的 id 前再加一层，仅用于同一 bank 内两端必须用不同模型的场景。",
 			},
 			{
 				group: "精神模型",

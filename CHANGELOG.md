@@ -5,6 +5,20 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.8.0 — 精神模型与 omp 统一到同一份（取消 `dsh-` 前缀 + 注入过滤改为 scope 语义）
+
+- 背景：0.7.x 的 `dsh-` 前缀是为「单 bank + 标签分栏」时代设计的避撞手段（那时所有项目共用一个 `shared` bank，omp 的 id 又会把纯中文项目名全部退化成 `project-conventions-project`，见 §25.4）。切到 `per-project`（每项目独占一个 bank）后这个约束消失了，前缀本身开始制造**重复注入**。
+- 根因（源码级，omp 18.13.1）：omp 注入精神模型时**只按 scope 过滤、不按 id 过滤** —— `loadMentalModelsBlock` 传的是 `recallTags`，`per-project` 下为空 ⇒ **bank 里每个模型都被注入**。于是 omp 建的 `project-conventions` 与 DSH 建的 `dsh-project-conventions-<项目名>` 两份同语义模型同时进上下文。
+- 实测症状（切换前）：`mem-随便问问` 的注入块 7 节，标题 `Project Conventions` 出现两次，块末尾出现 `[mental-model snapshot truncated at render budget]`（渲染预算 `hindsight.mentalModelMaxRenderChars` 默认 16000 字符被重复内容吃光）。
+- 改 id 规则（`src/mental-models.js`）：复刻 omp 的 `deriveSeedId` —— `global`/`per-project` 用**裸 id**（`user-preferences` / `project-conventions` / `project-decisions`），`per-project-tagged` 用裸 id + 项目 slug 后缀（slug 规则也复刻 omp，只保留 ASCII、空则回落 `project`）。⇒ 两端共用同一份模型，服务端 LLM 少跑一半 refresh，注入上下文不再翻倍。
+- 改注入过滤（`src/parity.js` + `src/index.js`）：从「id 白名单」改为与 omp 同规则的 **scope 过滤**（新增 `mentalModelVisible(model, scopeTags)`）。原来用 id 白名单 ⇒ **自定义模型（如手写的架构文档）在一端可见、另一端不可见**，同样是行为不对齐。
+- 配置键 `mentalModelPrefix` 语义变更：默认 `"dsh"` → `""`（空 = 与 omp 完全同名）；保留为**可选隔离层**，填值就在 omp 的 id 前再加一层，用于「同一 bank 内两端必须用不同模型」的特殊场景。
+- 契约变更：**配置键 `mentalModelPrefix` 的默认值变了**（`"dsh"` → `""`），且**默认行为下的 mental model id 变了**（`dsh-project-conventions-<项目名>` → `project-conventions`）。按 0.x 版本策略属契约变化 ⇒ 升 minor 到 **0.8.0**。工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增，返回体无新增字段。
+- 数据迁移（本机一次性）：各 `mem-*` bank 删除 `dsh-*` 副本，并把同角色两份中**正文更长**的那份写进 omp 侧裸 id（走 `document-transfer`，因为 `POST /mental-models` 与 `PATCH` 都不接受 `content`）。结果 7 个 bank 各剩 3 个裸 id 模型、无 `dsh-` 残留。
+- 验收：注入块从 7 节降到 4 节，标题 `Project Conventions` 只出现一次；单测 **121/121** 通过（新增 2 条：scope 可见性契约、id 默认与 omp 相同）。
+- 保留的取舍：`per-project-tagged` 下中文项目名仍会退化（与 omp 一致）——这是 omp 自身的坑，DSH 不再单方面规避，规避会导致两端 id 不同、又回到重复注入的老路。单 bank 多中文项目应切 `per-project`。
+- 装载提示：DSH 在启动时解析并缓存每个包的 `package.json`，装了 0.8.0 之后**必须重启 DSH Web** 才装载新代码。
+
 ## 0.7.4 — 文档对齐 per-project 布局 + 两条 per-project 口径的验证脚本
 
 - 背景：本机 Hindsight 的作用域从「单库 `shared` + `project:` 标签分栏」改成「**每项目一个独立 bank**」（bank 基名 `mem`，bank 名 `mem-<项目目录名小写>`）。插件**无需任何代码改动**——`config.js` 的 `SCOPINGS` 本就内置 `global|per-project|per-project-tagged`，`parity.js` 的 `computeBankScope()` 与 omp 同算法，切作用域只改配置。

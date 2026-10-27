@@ -79,42 +79,65 @@ const retainResult = await client.retain({
 });
 check("retain 被接受", !!retainResult?.result, JSON.stringify(retainResult).slice(0, 160));
 
-const listFacts = async (bank) => {
-	const res = await fetch(`${apiUrl}/v1/default/banks/${encodeURIComponent(bank)}/memories/list?limit=300`);
+const listFacts = async (bank, state) => {
+	const url = new URL(`${apiUrl}/v1/default/banks/${encodeURIComponent(bank)}/memories/list`);
+	url.searchParams.set("limit", "300");
+	// consolidation 会把被合并的原始事实置为 invalidated（服务端自动巩固的正常行为），
+	// 所以探针可能落在 valid 或 invalidated 两种状态里，两个都要看。
+	if (state) url.searchParams.set("state", state);
+	const res = await fetch(url);
 	if (!res.ok) return [];
 	const body = await res.json();
 	return body?.items ?? body?.memories ?? [];
+};
+const findProbe = async (bank) => {
+	const live = await listFacts(bank);
+	if (live.some((f) => String(f.text ?? "").includes(marker))) return true;
+	const archived = await listFacts(bank, "invalidated");
+	return archived.some((f) => String(f.text ?? "").includes(marker));
 };
 
 const deadline = Date.now() + 180_000;
 let landed = false;
 while (Date.now() < deadline) {
 	await new Promise((r) => setTimeout(r, 10_000));
-	const facts = await listFacts(expectedBank);
-	if (facts.some((f) => String(f.text ?? "").includes(marker))) { landed = true; break; }
+	if (await findProbe(expectedBank)) { landed = true; break; }
 }
 check("探针事实落进 DSH 解析出的 bank", landed, `bank=${expectedBank}`);
 
 const otherBank = bankIds.find((b) => b.startsWith(`${pluginConfig.bankId}-`) && b !== expectedBank);
 if (otherBank) {
-	const leaked = (await listFacts(otherBank)).filter((f) => String(f.text ?? "").includes(marker));
+	const leaked = [
+		...(await listFacts(otherBank)),
+		...(await listFacts(otherBank, "invalidated")),
+	].filter((f) => String(f.text ?? "").includes(marker));
 	check("其它项目 bank 看不到（硬隔离负例）", leaked.length === 0, `bank=${otherBank} leaked=${leaked.length}`);
 } else {
 	check("其它项目 bank 看不到（硬隔离负例）", true, "无对照 bank，跳过");
 }
 
 const recalled = await client.recall({ query: marker, scope: SCOPE.PROJECT, budget: "low" });
-check("recall 命中", recalled.facts.some((f) => String(f.text ?? "").includes(marker)), `count=${recalled.facts.length}`);
+// 探针可能已被 consolidation 合并成 observation（原始事实自动 invalidated），
+// 召回结果里出现 marker 就算命中（valid world / observation 任一）。
+check(
+	"recall 命中",
+	recalled.facts.some((f) => String(f.text ?? "").includes(marker)),
+	`count=${recalled.facts.length}`,
+);
 
 // ── 4. 清理 ────────────────────────────────────────────────────────────────
+// 探针可能已被 consolidation 合并成 observation（原始事实自动置 invalidated），
+// 两种状态都要清理，否则会留下垃圾事实。
 let invalidated = 0;
-for (const f of await listFacts(expectedBank)) {
-	if (!String(f.text ?? "").includes(marker)) continue;
-	const res = await fetch(
-		`${apiUrl}/v1/default/banks/${encodeURIComponent(expectedBank)}/memories/${f.id}`,
-		{ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: "invalidated" }) },
-	);
-	if (res.ok) invalidated += 1;
+for (const state of [undefined, "invalidated"]) {
+	for (const f of await listFacts(expectedBank, state)) {
+		if (!String(f.text ?? "").includes(marker)) continue;
+		const res = await fetch(
+			`${apiUrl}/v1/default/banks/${encodeURIComponent(expectedBank)}/memories/${f.id}`,
+			{ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: "invalidated" }) },
+		);
+		if (res.ok) invalidated += 1;
+	}
 }
 check("探针事实已作废", invalidated > 0, `invalidated=${invalidated}`);
 

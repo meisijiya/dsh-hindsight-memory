@@ -33,13 +33,22 @@ function baseConfig(transport) {
 	return normalizeConfig({ apiUrl, bankId: bankBase, bankIdPrefix: "", scoping: "per-project", transport });
 }
 
-const listBankFacts = async (bank) => {
-	const res = await fetch(
-		`${apiUrl}/v1/default/banks/${encodeURIComponent(bank)}/memories/list?limit=300`,
-	);
+const listBankFacts = async (bank, state) => {
+	const url = new URL(`${apiUrl}/v1/default/banks/${encodeURIComponent(bank)}/memories/list`);
+	url.searchParams.set("limit", "300");
+	// consolidation 会把被合并的原始事实置为 invalidated（服务端自动巩固的正常行为），
+	// 所以探针可能落在 valid 或 invalidated 两种状态里，两个都要看。
+	if (state) url.searchParams.set("state", state);
+	const res = await fetch(url);
 	if (!res.ok) return [];
 	const body = await res.json();
 	return body?.items ?? body?.memories ?? [];
+};
+const findProbe = async (bank) => {
+	const live = await listBankFacts(bank);
+	if (live.some((f) => String(f.text ?? "").includes(marker))) return true;
+	const archived = await listBankFacts(bank, "invalidated");
+	return archived.some((f) => String(f.text ?? "").includes(marker));
 };
 
 const banks = await (await fetch(`${apiUrl}/v1/default/banks`)).json();
@@ -79,15 +88,17 @@ const deadline = Date.now() + WAIT_BUDGET_MS;
 let landed = false;
 while (Date.now() < deadline) {
 	await new Promise((r) => setTimeout(r, 10_000));
-	const facts = await listBankFacts(expectedBank);
-	if (facts.some((f) => String(f.text ?? "").includes(marker))) { landed = true; break; }
+	if (await findProbe(expectedBank)) { landed = true; break; }
 }
 check("探针事实落进本项目 bank", landed, `bank=${expectedBank}`);
 
 // 负例：别的项目 bank 里不能出现本项目的探针事实。
 const otherBank = bankIds.find((b) => b.startsWith(`${bankBase}-`) && b !== expectedBank);
 if (otherBank) {
-	const otherFacts = await listBankFacts(otherBank);
+	const otherFacts = [
+		...(await listBankFacts(otherBank)),
+		...(await listBankFacts(otherBank, "invalidated")),
+	];
 	const leaked = otherFacts.filter((f) => String(f.text ?? "").includes(marker));
 	check("别的项目 bank 看不到本项目事实（硬隔离负例）", leaked.length === 0, `bank=${otherBank} leaked=${leaked.length}`);
 } else {
@@ -118,16 +129,19 @@ try {
 }
 
 // ── 清理：把探针事实作废 ────────────────────────────────────────────────────
+// 探针可能已被 consolidation 合并成 observation（原始事实自动 invalidated），
+// 两种状态都要清理，否则会留下垃圾事实。
 try {
-	const facts = await listBankFacts(expectedBank);
 	let invalidated = 0;
-	for (const f of facts) {
-		if (!String(f.text ?? "").includes(marker)) continue;
-		const res = await fetch(
-			`${apiUrl}/v1/default/banks/${encodeURIComponent(expectedBank)}/memories/${f.id}`,
-			{ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: "invalidated" }) },
-		);
-		if (res.ok) invalidated += 1;
+	for (const state of [undefined, "invalidated"]) {
+		for (const f of await listBankFacts(expectedBank, state)) {
+			if (!String(f.text ?? "").includes(marker)) continue;
+			const res = await fetch(
+				`${apiUrl}/v1/default/banks/${encodeURIComponent(expectedBank)}/memories/${f.id}`,
+				{ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: "invalidated" }) },
+			);
+			if (res.ok) invalidated += 1;
+		}
 	}
 	check("探针事实已作废", invalidated > 0, `invalidated=${invalidated}`);
 } catch (error) {

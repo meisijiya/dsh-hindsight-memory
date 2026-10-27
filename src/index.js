@@ -21,7 +21,7 @@ import { normalizeConfig } from "./config.js";
 import { LiveConfig } from "./schema.js";
 import { resolveProjectLabel } from "./label.js";
 import { HindsightMemoryClient } from "./client.js";
-import { SCOPE, TIER, computeBankScope, localTimestamp, tierOf } from "./parity.js";
+import { SCOPE, TIER, computeBankScope, localTimestamp, mentalModelVisible, tierOf } from "./parity.js";
 import { normalizeScope, sanitizeMemoryText, sanitizeTags } from "./sanitize.js";
 import { findDuplicateGroups, planPrune, summarizeGroups, filterByScope, describeLayers } from "./hygiene.js";
 import {
@@ -461,11 +461,13 @@ export async function apply(ctx, rawConfig = {}) {
 			const raw = await channel.client.listMentalModels({
 				detail: "content",
 				limit: 200,
-				signal,
+				signal: exec?.signal,
 			});
 			const models = normalizeMentalModels(raw?.models ?? raw?.items ?? raw);
-			const wanted = Object.values(mentalModelIds(config, channel.label));
-			const mine = models.filter((model) => wanted.includes(model.id));
+			// 过滤规则与 omp 一致：**只按 scope 过滤，不按 id 过滤**
+			// （omp 传的是 recallTags；per-project 下为空 ⇒ 不过滤，bank 里每个模型都注入）。
+			const scope = computeBankScope(config, channel.label);
+			const mine = models.filter((model) => mentalModelVisible(model, scope.recallTags));
 			return renderMentalModelMessage(mine, { bankId: channel.client.bankId });
 		} catch (error) {
 			log(`mental model 取正文失败（忽略）：${error?.message ?? error}`);

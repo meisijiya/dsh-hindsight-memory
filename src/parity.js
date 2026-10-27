@@ -160,6 +160,30 @@ export function tierOf(fact) {
 }
 
 /**
+ * 精神模型的可见性过滤 —— **与 omp 完全同规则**。
+ *
+ * omp 侧注入精神模型时传的是 `recallTags`，过滤函数是
+ * `matchScope(model, scopeTags)`：
+ *   - scopeTags 为空（`global` / `per-project` 作用域）⇒ **不过滤**，
+ *     bank 里的每个模型都注入；
+ *   - scopeTags 非空（`per-project-tagged`）⇒ 模型无 tag 或命中其中之一才注入。
+ *
+ * 🔴 为什么不能用「id 白名单」过滤：omp 不过滤 id，只过滤 scope。
+ * 两端过滤规则不同 ⇒ 同一个 bank 里出现两份同语义模型时，一端注入两份、
+ * 另一端只注入一份（或都不注入），行为不再对齐。
+ *
+ * @param {{tags?: string[]}} model 服务端返回的 mental model。
+ * @param {string[]} scopeTags 当前作用域的 tag 列表（空数组 = 不过滤）。
+ * @returns {boolean} 该模型是否应被注入。
+ */
+export function mentalModelVisible(model, scopeTags) {
+	if (!Array.isArray(scopeTags) || scopeTags.length === 0) return true;
+	const tags = Array.isArray(model?.tags) ? model.tags : [];
+	if (tags.length === 0) return true;
+	return tags.some((tag) => scopeTags.includes(tag));
+}
+
+/**
  * 客户端过滤：只保留无标签的（用于"纯全局层"召回）。
  * @param {Array} facts
  * @returns {Array}

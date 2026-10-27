@@ -6,24 +6,37 @@
  *   **mental model**：由服务端用 LLM 从事实层归纳出来的、可注入系统提示的长期画像。
  *   omp 每次启动都会保证 3 个 mental model 存在，并把正文注入会话提示：
  *     ① `user-preferences`（全局层，**无 tag**）
- *     ② `project-conventions-<slug>`（项目层，tags=[project:<name>]）
- *     ③ `project-decisions-<slug>`（项目层，tags=[project:<name>]）
+ *     ② `project-conventions`（项目层）
+ *     ③ `project-decisions`（项目层）
  *
  * 🔴 三个必须踩准的坑（都是报告里实测过的）：
  *   1. `POST /mental-models` 是**仅创建**，不是 upsert：重复 id 返回 409，
  *      且**已有模型的 tags 不会被改写** ⇒ 想改标签必须 `PATCH`。
- *   2. mental model id 必须**全局唯一**。omp 的 slug 规则是「只保留 ASCII 字母数字」，
- *      于是所有纯中文项目名都退化成 `project-conventions-project` ⇒ 互相抢同一个 id。
- *      本插件改用「**完整项目名 + 固定前缀**」：中文名不再退化，也和 omp 的 id 互不冲突。
+ *   2. mental model id 必须**在同一 bank 内唯一**。旧的 `dsh-` 前缀方案是为
+ *      「单 bank + 标签分栏」时代设计的：那时所有项目共用一个 bank，omp 的 id
+ *      又会把纯中文项目名退化成同一个 `project-conventions-project`（见 omp 报告
+ *      第 4.2 节），前缀是唯一的避撞手段。
+ *      **切到 `per-project`（每项目独占一个 bank）后这个约束消失了** ——
+ *      bank 隔离比 id 前缀强得多，omp 侧此时直接用裸 id（见下方 `deriveIds`）。
+ *      本插件因此与 omp 对齐：**同一个 bank 里只保留一份模型，两端共用**。
  *   3. 触发器必须 `{mode:"delta", refresh_after_consolidation:true}`，
  *      否则 consolidation 之后不会自动增量刷新 ⇒ 模型内容会一直停在旧快照。
+ *
+ * 🔴 为什么 id 必须两端完全一致（2026-08 起）：
+ *   omp 注入精神模型时**不按 id 过滤，只按 tags 过滤**
+ *   （`loadMentalModelsBlock` → `filter(m => tagsMatch(m, scope))`）。
+ *   在 `per-project` 模式下 scope 为空 ⇒ **bank 里的每一个模型都会被注入**，
+ *   两端各建一份同语义模型就会让上下文里出现两份「Project Conventions」，
+ *   并且把渲染预算（默认 16000 字符）吃光、触发
+ *   `[mental-model snapshot truncated at render budget]`。
+ *   所以「两端共用同一份模型」不是洁癖，是正确性要求。
  */
 
-/** 全局 mental model 的固定 id 片段。 */
+/** 全局 mental model 的固定 id。 */
 export const USER_MODEL = "user-preferences";
-/** 项目约定 mental model 的固定 id 片段。 */
+/** 项目约定 mental model 的固定 id。 */
 export const CONVENTIONS_MODEL = "project-conventions";
-/** 项目决策 mental model 的固定 id 片段。 */
+/** 项目决策 mental model 的固定 id。 */
 export const DECISIONS_MODEL = "project-decisions";
 
 /**
@@ -40,7 +53,7 @@ export const SOURCE_QUERIES = Object.freeze({
 });
 
 /**
- * 归一化前缀：只允许小写字母、数字、连字符。
+ * 归一化前缀：只允许小写字母、数字、连字符。**空串是合法值**（= 不加前缀）。
  * @param {string} value 原始前缀。
  * @returns {string}
  */
@@ -50,27 +63,52 @@ function normalizePrefix(value) {
 		.toLowerCase()
 		.replace(/[^a-z0-9-]+/g, "-")
 		.replace(/^-+|-+$/g, "");
-	return cleaned || "dsh";
+	return cleaned;
 }
 
 /**
  * 生成 3 个 mental model 的 id。
  *
- * 关键：项目名用**完整标签**（不裁 ASCII），所以中文项目名不会互相碰撞；
- * 再加固定前缀，和 omp 的 id 空间彻底分开（避免 409 与 tags 抢写）。
+ * 与 omp 对齐（复刻 omp 的 `deriveSeedId` / slug 规则）：
+ *   - `global` / `per-project` 作用域 ⇒ **裸 id**（`user-preferences` /
+ *     `project-conventions` / `project-decisions`）。bank 已按项目隔离
+ *     （或全局唯一），id 不需要再带项目名。
+ *   - `per-project-tagged` 作用域 ⇒ **裸 id + 项目 slug 后缀**
+ *     （`project-conventions-blog`）。这是 omp 在单 bank 标签分栏下的形态。
  *
- * @param {{mentalModelPrefix?: string}} config 归一化配置。
+ * `mentalModelPrefix` 保留为**可选**的额外隔离层：默认空 = 与 omp 完全同名；
+ * 填了值（例如 `dsh`）就在 omp 的 id 前再加一层前缀，用于「同一 bank 内
+ * 两端必须用不同模型」的特殊场景。日常不需要填。
+ *
+ * @param {{scoping?: string, mentalModelPrefix?: string}} config 归一化配置。
  * @param {string} label 项目标签（小写 basename）。
  * @returns {{user: string, conventions: string, decisions: string}}
  */
 export function mentalModelIds(config, label) {
 	const prefix = normalizePrefix(config?.mentalModelPrefix);
+	const scoped = config?.scoping === "per-project-tagged";
 	const project = String(label ?? "").trim() || "unknown";
+	const slug = scoped ? `-${ompSlug(project)}` : "";
+	const withPrefix = (id) => (prefix ? `${prefix}-${id}` : id);
 	return {
-		user: `${prefix}-${USER_MODEL}`,
-		conventions: `${prefix}-${CONVENTIONS_MODEL}-${project}`,
-		decisions: `${prefix}-${DECISIONS_MODEL}-${project}`,
+		user: withPrefix(USER_MODEL),
+		conventions: withPrefix(`${CONVENTIONS_MODEL}${slug}`),
+		decisions: withPrefix(`${DECISIONS_MODEL}${slug}`),
 	};
+}
+
+/**
+ * omp 的项目 slug 规则：只保留 ASCII 字母数字与 `.` `_` `-`，其余折叠成 `-`，
+ * 首尾 `-` 去掉，空则回落 `project`。
+ * @param {string} value 项目名。
+ * @returns {string}
+ */
+function ompSlug(value) {
+	const cleaned = String(value ?? "")
+		.trim()
+		.replace(/[^A-Za-z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return cleaned || "project";
 }
 
 /**

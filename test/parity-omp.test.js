@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { HindsightMemoryClient } from "../src/client.js";
 import { DEFAULTS, normalizeConfig } from "../src/config.js";
-import { buildRetainPayload, localTimestamp } from "../src/parity.js";
+import { buildRetainPayload, localTimestamp, mentalModelVisible } from "../src/parity.js";
+import { mentalModelIds } from "../src/mental-models.js";
 
 const SRC_DIR = new URL("../src/", import.meta.url);
 const readSrc = (name) => readFile(new URL(name, SRC_DIR), "utf8");
@@ -71,6 +72,25 @@ test("mental model 的 max_tokens 下限是 256（服务端 422 的硬门槛）"
 	assert.equal(low.mentalModelProjectMaxTokens, 256);
 	assert.equal(DEFAULTS.mentalModelUserMaxTokens, 600);
 	assert.equal(DEFAULTS.mentalModelProjectMaxTokens, 800);
+});
+
+test("精神模型的可见性与 omp 同规则：只按 scope 过滤，不按 id 过滤", () => {
+	// per-project / global：scope 为空 ⇒ 不过滤，bank 里每个模型都注入（与 omp 一致）。
+	assert.equal(mentalModelVisible({ id: "anything", tags: [] }, []), true);
+	assert.equal(mentalModelVisible({ id: "anything", tags: ["project:x"] }, []), true);
+	// per-project-tagged：无 tag 的模型可见；命中 scope tag 的可见；别的不可见。
+	assert.equal(mentalModelVisible({ id: "a", tags: [] }, ["project:blog"]), true);
+	assert.equal(mentalModelVisible({ id: "a", tags: ["project:blog"] }, ["project:blog"]), true);
+	assert.equal(mentalModelVisible({ id: "a", tags: ["project:other"] }, ["project:blog"]), false);
+});
+
+test("mental model id 默认与 omp 完全相同（两端共用同一份模型）", () => {
+	const config = normalizeConfig({ scoping: "per-project" });
+	assert.equal(config.mentalModelPrefix, "");
+	const ids = mentalModelIds(config, "随便问问");
+	assert.equal(ids.user, "user-preferences");
+	assert.equal(ids.conventions, "project-conventions");
+	assert.equal(ids.decisions, "project-decisions");
 });
 
 test("自动留存节奏对齐 omp（retainEveryNTurns 默认 3，且不被 0/负数击穿）", () => {

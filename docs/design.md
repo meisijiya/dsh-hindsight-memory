@@ -808,15 +808,20 @@ hindsight-memory (dsh-hindsight-memory): failed to import:
 omp 的 mental model id 规则是「只保留 ASCII 字母数字」，
 所以纯中文项目名在 omp 侧全部退化成 `project-conventions-project`——本机实测该模型带着
 `project:随便问问` 的标签，即**多个中文项目会互相抢模型**。
-DSH 侧改用 `dsh-` 前缀 + 完整中文项目名（服务端不强制 id 只能 ASCII，实测中文 id 创建 200），
-于是 DSH 与 omp 的模型互不覆盖。
+
+> **2026-10-27 更新（切 `per-project` 后此坑自动消解）**：每个项目现在独占一个 bank，
+> bank 隔离比 id 前缀强得多 —— 同一 bank 内不可能有两个中文项目。
+> 本插件因此**取消 `dsh-` 前缀**，改用与 omp 完全相同的 id（详见 §26），
+> 两端共用同一份模型。
 
 ### 25.5 活体验收（旁路 headless，不动用户实例）
 
 `dsh headless --patch <overlay>.yml "…"`（overlay 里用 file:// 指向本地源码）实测：
 
 - `memory_mental_models action=ensure` → `created:0 patched:0 kept:3`，
-  `dsh-user-preferences`（tags=[]）、`dsh-project-conventions-随便问问`、`dsh-project-decisions-随便问问`（tags=["project:随便问问"]）。
+  三个模型的 id 与 omp 侧相同（`user-preferences` / `project-conventions` / `project-decisions`）。
+  （2026-10-27 前是 `dsh-user-preferences` / `dsh-project-conventions-随便问问` /
+  `dsh-project-decisions-随便问问`；见 §26。）
 - `memory_hygiene action=layers` → 全局层 23（world 13 / observation 10）、
   项目层 137（world 64 / observation 40 / experience 33）、其它项目层 19、合计 179。
 - `memory_status` → `bank.factCount=179, totalBanks=1, warnings=[]`；
@@ -1160,3 +1165,75 @@ register(owner, channel, handler) {
 ### 32.6 运维提醒
 - 本地联调时**不要**让 profile 里的同名包与 `--patch` 注入的副本并存：两份会抢同一个 prompt section 名（`prompt section "hindsight:memory" is already registered`），先到先得 ⇒ 联调副本必须改 section 名与通道名。
 - 通道 405 = 没注册上；通道 401 = 注册成功但没带 cookie。两者含义完全不同，别混。
+
+---
+
+## 33. v0.8.0：精神模型与 omp 统一到同一份（2026-10-27）
+
+### 33.1 背景：切 `per-project` 后，`dsh-` 前缀从「避撞手段」变成「重复来源」
+
+v0.7.x 的 `dsh-` 前缀是为**单 bank + 标签分栏**时代设计的：那时所有项目共用一个 `shared` bank，
+而 omp 的 id 规则会把纯中文项目名全部退化成 `project-conventions-project`（§25.4 实测），
+前缀是唯一的避撞手段。
+
+2026-10-27 本机切到 `per-project`（每项目独占一个 bank）后，这个约束**消失了** ——
+同一 bank 内不可能有两个项目，bank 隔离比 id 前缀强得多。而前缀本身开始制造新问题：
+
+**omp 注入精神模型时只按 scope 过滤、不按 id 过滤。**
+源码级证据（omp 18.13.1 二进制）：
+
+```js
+// loadMentalModelsBlock → tryLoadMentalModelsBlock(client, bankId, budget, scopeTags)
+const r = (i.items ?? []).filter((s) => v(s, o) && typeof s.content === "string" && s.content.trim().length > 0);
+// v(model, scopeTags)：scopeTags 为空 ⇒ 一律 true
+async #o(t, e, s) {
+  const n = await xge(this.client, this.bankId, this.config.mentalModelMaxRenderChars, this.recallTags);
+  //                                                                                        ↑↑↑↑↑↑↑
+}
+```
+
+`per-project` 作用域下 `recallTags = []` ⇒ **bank 里每个模型都被注入**。
+于是同一 bank 里的 `project-conventions`（omp 建的）与 `dsh-project-conventions-<项目名>`（DSH 建的）
+两份同语义模型同时进入上下文。
+
+**实测（切换前，`mem-随便问问`）**：注入块 7 节，标题 `Project Conventions` 出现两次，
+块末尾出现 `[mental-model snapshot truncated at render budget]` —— 渲染预算
+（`hindsight.mentalModelMaxRenderChars`，默认 16000 字符）被重复内容吃光。
+
+### 33.2 改动
+
+1. **`src/mental-models.js` — id 规则改为复刻 omp**
+   - `global` / `per-project` ⇒ **裸 id**（`user-preferences` / `project-conventions` / `project-decisions`）。
+     omp 侧同规则见其 `deriveSeedId`：只有 `per-project-tagged` 才加项目 slug 后缀。
+   - `per-project-tagged` ⇒ 裸 id + 项目 slug 后缀（`project-conventions-blog`），slug 规则也复刻 omp
+     （只保留 ASCII，空则回落 `project`）⇒ 中文名在两端**一致地**退化，不额外造 id。
+   - `mentalModelPrefix` 保留为**可选隔离层**：默认空 = 与 omp 完全同名；填值（如 `dsh`）就在 omp 的 id 前再加一层。
+2. **`src/config.js` / `src/schema.js` / `src/ui-client.js`** — `mentalModelPrefix` 默认值 `"dsh"` → `""`，说明文字改写。
+3. **`src/parity.js` — 新增 `mentalModelVisible(model, scopeTags)`**：与 omp 的 `v()` 同规则
+   （scope 为空 ⇒ 不过滤；否则无 tag 或命中其一才可见）。
+4. **`src/index.js` — 注入过滤从「id 白名单」改为「scope 过滤」**：
+   ```js
+   const scope = computeBankScope(config, channel.label);
+   const mine = models.filter((model) => mentalModelVisible(model, scope.recallTags));
+   ```
+   原来用 `wanted.includes(model.id)` 白名单 ⇒ **自定义模型（如手写的架构文档）在一端可见、另一端不可见**，
+   同样是行为不对齐。
+
+### 33.3 数据迁移（一次性）
+
+各 `mem-*` bank 里删除 `dsh-*` 副本，并把两份同角色模型中**正文更长**的那份写进 omp 侧的裸 id
+（导入走 `document-transfer`，因为 `POST /mental-models` 与 `PATCH` 都不接受 `content`）。
+结果：7 个 bank 各剩 3 个裸 id 模型，无 `dsh-` 残留。
+
+### 33.4 验收
+
+- 注入块从 7 节降到 4 节，标题 `Project Conventions` 只出现一次。
+- 单测 121/121 通过（新增 2 条：scope 可见性契约、id 默认与 omp 相同）。
+
+### 33.5 保留的取舍
+
+- **`per-project-tagged` 下中文项目名仍会退化**（与 omp 一致）。这是 omp 自身的坑，
+  DSH 不再单方面规避 —— 规避会导致两端 id 不同、又回到重复注入的老路。
+  单 bank 多中文项目的场景应切 `per-project`。
+- `mentalModelPrefix` 保留而非删除：它是公开配置键，按插件的契约策略（先加新的、标旧字段 deprecated、
+  下一 minor 再删）不在这版里移除；但默认值已改为空串。
