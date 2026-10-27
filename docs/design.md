@@ -187,7 +187,7 @@ export { apply, inject, name, Config };
 
 官方包 `@vectorize-io/hindsight-coding-agents` 0.8.2 的 DSH 目标（`dist/dsh.js`）**不能**直接满足本项目诉求：
 
-1. **bank 命名**默认 `coding-agent::{gitProject}`（每项目一个 bank）——与 omp 的单 bank + 标签不符；对齐需 `bankId:"shared"` + `dynamicBankId:false`。
+1. **bank 命名**默认 `coding-agent::{gitProject}`（每项目一个 bank）——大小写与 omp 不一致（见第 2 点），且未提供 `bankId` + `scoping` 这组可对齐的旋钮；本项目改为与其对齐的写法是 `bankId:"mem"` + `scoping:"per-project"`，让 bank 名由 omp 与插件共同推导。
 2. **标签大小写**：`{gitProject}` = 主 worktree 根 basename，**不转小写**；omp 转小写 ⇒ 英文含大写的仓库名两边互不可见。
 3. **写侧强制 provenance tag**：`source:chat` + `harness:<id>`（`RESERVED_TAG_PREFIX=^(source|harness):` 顶不掉）⇒ **产不出无标签全局层记忆**。
 4. **读侧不过滤**：`autoInject` 默认 `reflect` ⇒ 只发 `{query,budget}` 不带 tags；`recallOptions` 原样拷贝、不做模板替换 ⇒ 无法自动按项目拼过滤条件。
@@ -496,15 +496,19 @@ dsh plugin --profile web remove dsh-hindsight-memory
   只关 provider 即可：provider 停用 ⇒ body 不再 active ⇒ 该 source 无 recall 路由（`:2074`），
   面板显示「0/0 已激活」属预期。
 
-## 17. 记忆库命名（`shared` 是什么）
+## 17. 记忆库命名（每项目一个 bank）
 
-- Hindsight 的存储单位是**记忆库（bank）**，`/v1/default/banks` 可列；本机当前**只有一个** `shared`。
-- `shared` 是**库名，不是前缀**：所有项目的记忆都在同一个库里，项目隔离靠标签
-  （`project:<仓库名小写>` = 项目层；无标签 = 全局层）。
-- 只有当 omp 改成 `scoping: per-project` 时，服务端才会真的出现 `shared-<项目名>` 这样的多个库——
-  那是"硬隔离、无全局层"的另一套方案，本插件默认对齐 omp 官方的 `per-project-tagged`。
-- 命名坑：库名含中文必须 percent-encode（`shared-%E4%BE%B0%E9%97%B2%E9%97%AE%E9%97%AE`），
-  raw UTF-8 路径会被服务端解码成乱码库（`shared-侰闲问问`）并留下垃圾库。
+- Hindsight 的存储单位是**记忆库（bank）**，`/v1/default/banks` 可列。
+- **当前布局（2026-10-27 起）**：bank 基名 `mem`，`scoping: per-project` ⇒ 服务端出现
+  `mem-<项目目录名小写>` 这样的多个库（`mem-随便问问`、`mem-blog`、`mem-毕设`…）。
+  omp 与 DSH 共享这批库（两端 `bankId` 都是 `mem`），但项目之间互不共享。
+- 好处：删除某项目全部记忆 = 一条 `DELETE /v1/default/banks/mem-<项目名>`，不会误伤其它项目；
+  前端切换 bank 即可查看对应项目的记忆。
+- 代价：无单一全局层。旧单库 `shared` 里的 96 条无标签全局事实已**复制进每个项目库**，
+  仍能召回，但没有单一真源，后续修改需同步多份。
+- 旧的单库 `shared` 保留作回滚点；回滚 = 两端改回 `bankId: shared` + `scoping: per-project-tagged`。
+- 命名坑：库名含中文必须 percent-encode（`mem-%E9%9A%8F%E4%BD%BF%E9%97%AE%E9%97%AE`），
+  raw UTF-8 路径会被服务端解码成乱码库（`mem-侰闲问问`）并留下垃圾库。
 
 ## 18. 远程仓库与安装路径
 

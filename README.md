@@ -61,17 +61,19 @@
 > 它的写侧能打标签，但**读侧不支持按项目过滤**（provider 0.5.6 的 `search()` 请求体写死 `{query,budget,max_tokens,types,prefer_observations}`），
 > 开着它就会出现「两边都在写、但过滤规则不一致」的分裂。**记忆空间组件本身不要关**——关掉会让 dsh-mnemon 的检索提醒整片清空。
 
-## `shared` 是什么？（常见误解澄清）
+## 记忆库布局：每项目一个 bank（2026-10-27 起）
 
-**`shared` 是记忆库（bank）的名字，不是前缀。**
+**当前这台机器上的实际布局是「每项目一个独立记忆库」**，bank 基名 `mem`，bank 名为 `mem-<项目目录名小写>`（如 `mem-随便问问`、`mem-blog`、`mem-毕设`）。
 
-- Hindsight 服务里存的是「记忆库（bank）」，每个库是一块独立空间。可以有多个库，服务端有 `/v1/default/banks` 接口可列。
-- 当前这台机器上**只建了一个库 `shared`**——因为 omp 与 DSH 要共享同一块记忆空间。
-- **项目隔离不靠库名，靠标签**：`shared` 库内部用 `project:<仓库名小写>` 标签区分项目层，用「无标签」表示全局层。
-  所以**不会**出现「每个项目目录前面都加 shared」这种结构——所有项目的记忆都在同一个 `shared` 库里，靠标签分层。
-- 如果把 omp 改成 `scoping: per-project`，Hindsight 侧就会真的多出 `shared-随便问问`、`shared-blog` 这样的**多个库**；那是另一种方案（硬隔离、无全局层），本插件默认对齐 omp 官方的 `per-project-tagged`。
+- Hindsight 服务里存的是「记忆库（bank）」，每个库是一块独立空间，可以有多个库，服务端有 `/v1/default/banks` 接口可列。
+- omp 与 DSH 仍然**共享同一批 bank**（两端 `bankId` 都设为 `mem`，靠 base 名对齐），但**项目之间不再共享同一个库**。
+- **项目隔离靠库名，不靠标签**：每个项目一个库 ⇒ 删除某个项目的全部记忆只需一条命令
+  `DELETE /v1/default/banks/mem-<项目名小写>`，不会误伤其它项目；在官方前端（<http://127.0.0.1:9999>）切换 bank 即可查看对应项目的记忆。
+- 三种作用域模式（`global` / `per-project` / `per-project-tagged`）由 `scoping` 选择，**插件已全部内置**，`parity.js` 的 `computeBankScope()` 与 omp 同算法。当前取 `per-project`。
+- 代价：跨项目通用经验不再自动共享。迁移时把旧单库里的 96 条无标签全局事实**复制进了每一个项目库**，所以每个项目仍能召回这些经验，但它们不再有单一真源，后续修改需同步多份。
+- 旧的单库 `shared`（约 2426 条事实、35 个精神模型）**完整保留作为回滚点**，未删除；回滚只需把两端配置改回 `bankId: shared` + `scoping: per-project-tagged`。
 
-一句话：**`shared` = 共享的那块记忆空间；`project:<名字>` = 这条记忆属于哪个项目。**
+一句话：**bank 名里的 `mem` = 记忆库基名；`mem-<项目名>` = 这个项目自己的那块记忆空间。**
 
 ---
 
@@ -127,9 +129,9 @@ https://raw.githubusercontent.com/meisijiya/dsh-hindsight-memory/main/index.json
         inject: true           # 是否注入常驻系统提示词段
         writeEnabled: true     # false = 只读（灰度第一步）
         apiUrl: 'http://127.0.0.1:8888'
-        bankId: shared          # 必须与 omp 的 hindsight.bankId 一致
+        bankId: mem              # 必须与 omp 的 hindsight.bankId 一致（当前为 mem）
         bankIdPrefix: ''
-        scoping: per-project-tagged   # global | per-project | per-project-tagged
+        scoping: per-project   # global | per-project | per-project-tagged（当前为 per-project）
         types: [world, experience]     # 与 omp 的 recallTypes 同值
         budget: mid
         reflectBudget: low
@@ -292,7 +294,7 @@ Hindsight 服务端自带 `/knowledge-base`（页 + 文件夹 + 全文检索）�
 
 三条守则（与 omp 对齐的具体含义）：
 
-1. **产出必须盖本项目标签** —— 不盖标签的页 omp 的 `per-project-tagged` 召回看不见（它只认「无标签」或「带本项目标签」）。
+1. **产出必须盖本项目标签** —— 这是 `per-project-tagged` 作用域下的硬要求：不盖标签的页 omp 召回看不见（它只认「无标签」或「带本项目标签」）。当前 `scoping: per-project` 时标签是冗余的（bank 本身已隔离），但盖上无害且便于跨模式回退时仍可判层。
 2. **不复用官方的 `source:`/`harness:` 标签** —— 那两个前缀是官方包的 provenance，混进来会让 DSH 侧按白名单过滤时把自家内容挡掉。
 3. **写操作异步 + 带 `metadata.session_id`** —— 页正文要等服务端合成（实测几十秒到几分钟），刚建完立刻 search 可能只拿到 `No content yet.`。
 
@@ -358,7 +360,9 @@ Hindsight 的事实**没有 DELETE 端点**，只有软退役（`state: "invalid
 ```bash
 node --test "test/*.test.js"     # 85 个单测（Windows 上不能写 node --test test/，会被当成模块解析）
 node scripts/validate-market-index.mjs    # 市场索引闸门（格式 1 契约 + commit 与版本号对账）
-node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查）
+node scripts/verify-live.mjs    # 活体自检（需要 Hindsight 服务在跑，8 项检查；per-project-tagged 口径）
+node scripts/verify-live-per-project.mjs [apiUrl] [bankBase] [项目名]   # per-project 口径活体自检（9 项：写入落在独立 bank + 跨 bank 硬隔离负例）
+node scripts/verify-dsh-runtime-e2e.mjs [apiUrl] [项目名]   # DSH 运行时端到端（从 dsh --dump-config 取真实配置喂插件，10 项）
 node scripts/panel.mjs          # 状态面板（项目标签自动按 omp 同规则推导）
 node scripts/hygiene.mjs        # 记忆卫生（默认只读预览；--apply 才作废，--consolidate 顺带合并）
 node scripts/isolation-check.mjs --a <项目目录> --b <另一个项目目录>   # 两项目隔离可见性矩阵

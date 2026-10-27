@@ -5,8 +5,8 @@
     "zh": "dsh-hindsight-memory 索引"
   },
   "description": {
-    "en": "Plugin market index for dsh-hindsight-memory, the DeepSeek Harness plugin that shares one Hindsight memory bank with omp (oh-my-pi) using identical tag semantics. Add the raw URL of this file under Plugins > Discover > Index sources.",
-    "zh": "dsh-hindsight-memory 的插件市场索引。DSH 的「插件 → 发现 → 索引源」里填入本文件的 raw URL 即可看到本插件。本插件让 DSH 与 omp 共用同一个 Hindsight 记忆库，并用同一套标签语义做全局层/项目层分层。"
+    "en": "Plugin market index for dsh-hindsight-memory, the DeepSeek Harness plugin that lets DSH and omp (oh-my-pi) share Hindsight memory with identical semantics and a selectable memory scope. Add the raw URL of this file under Plugins > Discover > Index sources.",
+    "zh": "dsh-hindsight-memory 的插件市场索引。DSH 的「插件 → 发现 → 索引源」里填入本文件的 raw URL 即可看到本插件。本插件让 DSH 与 omp 共用 Hindsight 记忆库，语义一致，记忆作用域可选。"
   },
   "metadata": {
     "categories": {
@@ -28,8 +28,8 @@
         "zh": "Hindsight 记忆（DSH）"
       },
       "description": {
-        "en": "Bridges the Hindsight memory service into DeepSeek Harness with omp-identical semantics: one shared bank, project tags stamped automatically, nine semantic tools (recall/retain/reflect/status/hygiene/mental_models/operations/pages/initiative) instead of raw MCP calls, plus a read-only memory dashboard on the plugin detail page, a memory-hygiene layer, a mental-model layer, a knowledge-page layer and a maintenance layer (audit / retract / restore / correct / supersede) that keep the shared bank deduplicated, correctable and readable for both agents. The plugin never exposes tags or bankId to the model.",
-        "zh": "把 Hindsight 记忆服务接进 DeepSeek Harness，行为与 omp 一致：同一个记忆库、项目标签自动盖章、模型只看见 recall/retain/reflect/status/hygiene/mental_models/operations/pages/initiative 九个语义化工具，看不到裸 MCP 工具，也碰不到 tags 与 bankId。另含插件详情页的记忆看板（只读）与记忆卫生层、精神模型层、知识页层与维护层（体检/退役/恢复/纠正/取代），让共享记忆库在两端同时保持去重整洁、可改可查。"
+        "en": "Bridges the Hindsight memory service into DeepSeek Harness with omp-identical semantics: memory scope is selectable (per-project bank isolation, or one shared bank with project tags stamped automatically), nine semantic tools (recall/retain/reflect/status/hygiene/mental_models/operations/pages/initiative) instead of raw MCP calls, plus a read-only memory dashboard on the plugin detail page, a memory-hygiene layer, a mental-model layer, a knowledge-page layer and a maintenance layer (audit / retract / restore / correct / supersede) that keep the shared bank deduplicated, correctable and readable for both agents. The plugin never exposes tags or bankId to the model.",
+        "zh": "把 Hindsight 记忆服务接进 DeepSeek Harness，行为与 omp 一致：记忆作用域可选（每项目独立 bank，或单库 + 项目标签自动盖章），模型只看见 recall/retain/reflect/status/hygiene/mental_models/operations/pages/initiative 九个语义化工具，看不到裸 MCP 工具，也碰不到 tags 与 bankId。另含插件详情页的记忆看板（只读）与记忆卫生层、精神模型层、知识页层与维护层（体检/退役/恢复/纠正/取代），让共享记忆库在两端同时保持去重整洁、可改可查。"
       },
       "author": "meisijiya",
       "homepage": "https://github.com/meisijiya/dsh-hindsight-memory",

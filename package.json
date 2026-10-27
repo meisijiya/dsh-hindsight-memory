@@ -1,7 +1,7 @@
 {
 	"name": "dsh-hindsight-memory",
-	"version": "0.7.3",
-	"description": "DeepSeek Harness plugin that bridges the Hindsight memory service to DSH with omp-identical read/write semantics (single shared bank, project tag stamping, project+global recall).",
+	"version": "0.7.4",
+	"description": "DeepSeek Harness plugin that bridges the Hindsight memory service to DSH with omp-identical read/write semantics (per-project bank isolation or a shared bank with project tag stamping, both selectable via the scoping config).",
 	"type": "module",
 	"main": "src/index.js",
 	"exports": {
@@ -90,6 +90,8 @@
 		"test": "node --test \"test/*.test.js\"",
 		"panel": "node scripts/panel.mjs",
 		"verify:live": "node scripts/verify-live.mjs",
+		"verify:live:per-project": "node scripts/verify-live-per-project.mjs",
+		"verify:dsh-runtime-e2e": "node scripts/verify-dsh-runtime-e2e.mjs",
 		"verify:market-index": "node scripts/validate-market-index.mjs"
 	}
 }

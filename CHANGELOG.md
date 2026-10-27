@@ -5,6 +5,15 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.7.4 — 文档对齐 per-project 布局 + 两条 per-project 口径的验证脚本
+
+- 背景：本机 Hindsight 的作用域从「单库 `shared` + `project:` 标签分栏」改成「**每项目一个独立 bank**」（bank 基名 `mem`，bank 名 `mem-<项目目录名小写>`）。插件**无需任何代码改动**——`config.js` 的 `SCOPINGS` 本就内置 `global|per-project|per-project-tagged`，`parity.js` 的 `computeBankScope()` 与 omp 同算法，切作用域只改配置。
+- 文档对齐：README 与 `docs/design.md` 里「`shared` 是库名不是前缀」「项目隔离靠标签」「只有切到 per-project 才会多出多个库」等段落全部改成当前实际布局，并写明代价（跨项目通用经验不再有单一真源）与回滚路径（改回 `bankId: shared` + `scoping: per-project-tagged` 即可，旧库完整保留）。「产出必须盖本项目标签」那条守则补上适用条件：`per-project` 下标签冗余但无害，保留它便于跨模式回退时仍可判层。
+- 新增 `scripts/verify-live-per-project.mjs`：per-project 口径的活体自检（9 项）——目标 bank 存在且名为 `<base>-<项目名小写>`、MCP 握手、client 解析出的 bank 名正确、探针事实落进本项目 bank、**别的项目 bank 看不到（硬隔离负例）**、recall 命中、REST 与 MCP 两条传输都命中、探针事实作废。原有的 `scripts/verify-live.mjs` 仍按 `per-project-tagged` 口径，两者互补。
+- 新增 `scripts/verify-dsh-runtime-e2e.mjs`：DSH 运行时端到端（10 项）——从 **`dsh --profile web --dump-config` 的真实合成输出**里解析出 `hindsight-memory` 的 config（而不是手工构造），喂给插件自己的 `normalizeConfig()` + `HindsightMemoryClient`，走 MCP 传输做一次真实写入，再做跨 bank 硬隔离负例与清理。这一步验证的是「DSH 运行时配置 → 插件代码 → 服务端落库位置」整条链路。
+- 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增，返回体无新增字段；插件包只多两个 `scripts/` 下的验证脚本与 `package.json` 的两条 npm script 别名。
+- 装载提示：DSH 在启动时解析并缓存每个包的 `package.json`，装了 0.7.4 之后**必须重启 DSH Web** 才装载新脚本（与 README 的既有说明一致）。
+
 ## 0.7.3 — 让"事实新旧排序"真正生效（0.7.2 那条修复是空转）
 
 - 问题：0.7.2 把 `recency()` 的回退链改成 `mentioned_at` → `date` → `occurred_start` 优先，但 `findDuplicateGroups` 产出的成员对象只带出 `createdAt` / `updatedAt` 两个时间字段 ⇒ 新增的分支在真实链路上**永远取不到值**，没有 `updated_at` 的事实仍全部算成 0，「保留最新一条」依旧退化成原始顺序。配套的两条测试又直接手工构造了 `findDuplicateGroups` 不会产出的成员形状（把 `mentioned_at` 直接挂在 member 上），于是测试是绿的、修复是空的。
