@@ -5,6 +5,16 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.9.0 — 修掉「DSH 一直连在旧单库 `shared` 上」：运行时配置真源改回包内默认值
+
+- 背景（实测，2026-10-28）：本机 Hindsight 已切到 **per-project 布局**（bank 基名 `mem`，库名 `mem-<项目名小写>`），omp 侧配置也已改成 `bankId: mem` + `scoping: per-project`；但 **DSH 侧实际仍在旧单库 `shared` 上跑 `per-project-tagged`** —— DSH Web 的「记忆看板」显示的是 `shared / 2426 条事实 / 全局层·项目层·其它项目层`，而不是 `mem-随便问问`。也就是说 0.8.0 的「两端共用同一份精神模型」对 DSH **实际未生效**：DSH 注入的还是 `shared` 里那 35 个模型（含 `dsh-*` 副本）。
+- 根因（判定实验，三步）：① 改 `~/.dsh/profiles/web/cordis.patch.yml` 的 `bankId` → 运行时无变化；② 改包内 `cordis.patch.yml` 的 `bankId`/`scoping` → 运行时无变化；③ 改 `src/config.js` 的 `DEFAULTS.bankId` → **立刻生效**（看板报 `Bank 'probedefault' not found`）。⇒ DSH 启动后交给本插件的配置是**空对象**，运行时真源是包内 `DEFAULTS`，profile 的行配置根本没被投递。
+- 修法：把生效真源改成当前布局 —— `DEFAULTS.bankId` `shared` → `mem`、`DEFAULTS.scoping` `per-project-tagged` → `per-project`；同时把**包内 `cordis.patch.yml`、`src/schema.js`、`src/ui-client.js` 三处默认值改成同一组值**，新增 `test/defaults.test.js`（3 条）把「四层默认值必须一致」钉成门禁。宿主将来若开始投递行配置，因为两边一致，行为不变。
+- 验证脚本跟着修正：`scripts/verify-dsh-runtime-e2e.mjs` 原来把 `dsh --dump-config` 的输出当作「运行时配置」（实测那是**合成视图**，不是投递值），所以它 10/10 通过却完全没测到真实行为。现在改为：运行时用插件默认值建 client，另加一项检查比对「宿主合成配置 == 插件默认值」，**11/11 通过**。
+- 契约变更：配置键 `bankId` / `scoping` 的**默认值**变了（`shared` → `mem`、`per-project-tagged` → `per-project`）⇒ 按 0.x 版本策略属契约变化 ⇒ 升 minor 到 **0.9.0**。工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增，返回体无新增字段。
+- 副作用与回滚：DSH 的记忆读写从旧单库 `shared` 切到 `mem-<项目名小写>`；旧的 `shared` 库（约 2426 条事实、35 个精神模型）**完整保留作回滚点**，回滚只需把包内 `DEFAULTS` 改回 `shared` + `per-project-tagged` 并重装插件。
+- 文档：README 补「运行时真源是包内默认值」告示与判定实验结论，架构图的库名改成 `mem-<项目名小写>`，面板提示文案同步（原来写「改配置请编辑 profile 的 cordis.patch.yml」，那是**无效路径**）。
+
 ## 0.8.1 — 写清「渲染预算让两端内容不等长」这件事
 
 - 背景：0.8.0 让两端共用同一份精神模型后，「共用模型」与「两端看到同样多的字符」是两件事。omp 把正文渲染成 `<mental_models>` 块，受 `hindsight.mentalModelMaxRenderChars` 约束（默认 16000 字符，**在模型之间等分**，超了块尾出现 `…[mental-model snapshot truncated at render budget]`）；本插件的 `renderMentalModelMessage()` 不设预算、渲染全量。模型正文够长时 omp 会被截断、DSH 不会。

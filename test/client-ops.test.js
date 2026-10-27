@@ -14,6 +14,9 @@ import { normalizeConfig } from "../src/config.js";
 
 /**
  * 起一个假服务端：handler 按 URL 分发，返回 Response 与调用记录。
+ *
+ * 🔴 配置里显式钉死 bankId/scoping：这些用例断言的是 URL 里的库名，
+ * 不能跟着 src/config.js 的 DEFAULTS 漂（DEFAULTS 是本机部署值，会变）。
  * @param {(url: string, init: object) => Response} handler
  */
 function withFakeServer(handler) {
@@ -24,7 +27,11 @@ function withFakeServer(handler) {
 		return handler(String(url), init ?? {});
 	};
 	const client = new HindsightMemoryClient({
-		config: normalizeConfig({ apiUrl: "http://hindsight.test" }),
+		config: normalizeConfig({
+			apiUrl: "http://hindsight.test",
+			bankId: "shared",
+			scoping: "global",
+		}),
 		label: "demo",
 		log: () => {},
 	});

@@ -57,8 +57,8 @@ window.__ModuleLoader__.load({
 				key: "bankId",
 				label: "记忆库 bank",
 				type: "text",
-				default: "shared",
-				doc: "必须与 omp 的 hindsight.bankId 一致（当前 shared）。项目隔离靠标签，不靠库名。",
+				default: "mem",
+				doc: "必须与 omp 的 hindsight.bankId 一致（当前 mem）。per-project 模式下实际库名 = <bankId>-<项目名小写>。",
 			},
 			{
 				group: "连接",
@@ -122,8 +122,8 @@ window.__ModuleLoader__.load({
 				label: "作用域模式",
 				type: "select",
 				options: ["global", "per-project", "per-project-tagged"],
-				default: "per-project-tagged",
-				doc: "global = 单库不隔离；per-project = 每项目一个库（硬隔离、无全局层）；per-project-tagged = 单库 + project:<标签> 过滤（推荐，与 omp 一致）。",
+				default: "per-project",
+				doc: "global = 单库不隔离；per-project = 每项目一个库（硬隔离、无全局层，当前与 omp 一致）；per-project-tagged = 单库 + project:<标签> 过滤。",
 			},
 			{
 				group: "隔离",
@@ -765,7 +765,7 @@ window.__ModuleLoader__.load({
 				h("p", { style: STYLE.note }, [
 					"记忆看板（只读）：下面是 Hindsight 记忆库当前的状态快照。",
 					h("br", null),
-					"改配置请编辑 profile 的 cordis.patch.yml（改完需重启 DSH）；想看记忆正文打开 ",
+					"运行时配置取自插件包内默认值（src/config.js 的 DEFAULTS）；想看记忆正文打开 ",
 					h(
 						"a",
 						{ href: "http://127.0.0.1:9999", target: "_blank", rel: "noreferrer" },

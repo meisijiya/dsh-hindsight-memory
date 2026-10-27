@@ -18,13 +18,15 @@
         writeEnabled: true
         # Hindsight 服务地址（Control Plane / API 根）。
         apiUrl: 'http://127.0.0.1:8888'
-        # bank 基名。必须与 omp 侧 hindsight.bankId 一致（当前为 shared）。
-        bankId: 'shared'
+        # bank 基名。必须与 omp 侧 hindsight.bankId 一致（当前为 mem）。
+        # 🔴 实测 DSH 运行时没有把行配置投递给本插件 ⇒ 真正生效的是
+        #    src/config.js 的 DEFAULTS。这里必须与它保持一致（test/defaults.test.js 门禁）。
+        bankId: 'mem'
         # bank 前缀（omp 的 hindsight.bankIdPrefix）。留空。
         bankIdPrefix: ''
         # 作用域模式：global | per-project | per-project-tagged
-        # 与 omp 的 hindsight.scoping 取值一一对应。
-        scoping: 'per-project-tagged'
+        # 与 omp 的 hindsight.scoping 取值一一对应（当前为 per-project）。
+        scoping: 'per-project'
         # 召回预算：low | mid | high（与 omp recallBudget 同名同义）。
         budget: 'mid'
         # 是否在会话首轮自动召回一次（落在会话历史里，不进系统提示词前缀）。

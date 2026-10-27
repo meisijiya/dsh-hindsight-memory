@@ -17,12 +17,15 @@ export const DEFAULTS = {
 	writeEnabled: true,
 	/** Hindsight 服务根地址。 */
 	apiUrl: "http://127.0.0.1:8888",
-	/** bank 基名。必须与 omp 的 hindsight.bankId 一致。 */
-	bankId: "shared",
+	/** bank 基名。必须与 omp 的 hindsight.bankId 一致（本机为 mem）。
+	 *  🔴 这是**兜底默认值**：实测 DSH 运行时没有把行配置投递给本插件，
+	 *  插件拿到的 raw config 为空 ⇒ 真正生效的是这里的默认值。
+	 *  改这里必须同时改 cordis.patch.yml 与 src/schema.js（见 test/defaults.test.js 的一致性门禁）。 */
+	bankId: "mem",
 	/** bank 前缀（omp 的 hindsight.bankIdPrefix）。 */
 	bankIdPrefix: "",
-	/** 作用域模式，与 omp 的 hindsight.scoping 一一对应。 */
-	scoping: "per-project-tagged",
+	/** 作用域模式，与 omp 的 hindsight.scoping 一一对应（本机为 per-project：每项目一个 bank）。 */
+	scoping: "per-project",
 	/** 召回的 fact 类型。服务端只认 world / observation / experience。
 	 *  默认与 omp 一致：["world","experience"]（omp 的 recallTypes 默认值）。 */
 	types: ["world", "experience"],

@@ -20,7 +20,7 @@
 模型 ──▶ memory_recall / memory_retain / memory_reflect / memory_status
               │  （插件盖章：project:<小写仓库名> 或 无标签）
               ▼
-        Hindsight 记忆库 `shared`
+        Hindsight 记忆库 `mem-<项目名小写>`
               ▲
               │  （omp 原生后端：自动盖章 + 自动过滤）
             omp
@@ -117,6 +117,16 @@ https://raw.githubusercontent.com/meisijiya/dsh-hindsight-memory/main/index.json
 索引里锁的是**精确 commit**（不是浮动 HEAD）；改索引只要重新拉取，不用重启 DSH。索引格式与发布流程见 `docs/market-index.md`。
 
 包声明了 `dsh.bundle.patch`，走 bundle 路线，profile 装载时自动组合插件自己的 `cordis.patch.yml`。
+
+> 🔴 **运行时真源是包内默认值，不是 profile 的行配置**（2026-10-28 实测）：
+> DSH 启动后本插件拿到的配置是**空对象** —— 改 `~/.dsh/profiles/<profile>/cordis.patch.yml`
+> 里的 `hindsight-memory` 行、或改包里的 `cordis.patch.yml`，都不改变运行时行为；
+> 只有改 `src/config.js` 的 `DEFAULTS` 才立刻生效（判定实验：把 DEFAULTS 的 bankId 改成
+> `probedefault` 后，看板立刻报 `Bank 'probedefault' not found`）。
+> 因此本仓库把 **DEFAULTS / 包内 cordis.patch.yml / schema.js / ui-client.js 四层默认值钉成一致**
+> （`test/defaults.test.js` 门禁），并要求 profile 里的行配置与之一致
+> （`scripts/verify-dsh-runtime-e2e.mjs` 有一项检查专门比对两者）。
+> 宿主将来若开始投递行配置，两边一致 ⇒ 行为不变。
 
 ## 配置
 

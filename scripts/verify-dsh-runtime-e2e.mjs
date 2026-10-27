@@ -1,10 +1,12 @@
 /**
- * DSH 端到端验证：从 `dsh --profile web --dump-config` 的**真实合成输出**里取出
- * hindsight-memory 的 config，喂给插件自己的 normalizeConfig + HindsightMemoryClient，
- * 走 MCP 传输做一次真实写入，再做跨 bank 硬隔离负例。
+ * DSH 端到端验证：确认「DSH 侧配置」与「插件代码」落在**同一个 bank**上，
+ * 再走 MCP 传输做一次真实写入 + 跨 bank 硬隔离负例。
  *
- * 这一步验证的是「DSH 运行时配置 → 插件代码 → 服务端落库位置」整条链路，
- * 而不是手工构造 config。
+ * 🔴 运行时真源是**插件包内默认值**（src/config.js 的 DEFAULTS）：
+ * 实测 2026-10-28，DSH 没有把行配置投递给本插件 —— 改 profile 的
+ * cordis.patch.yml 与插件自带的 cordis.patch.yml 都不改变运行时行为。
+ * 因此本脚本用插件默认值建 client，并额外断言「宿主合成配置 == 插件默认值」，
+ * 这样无论宿主将来是否投递配置，跑出来的 bank 都一致。
  *
  * 用法：node scripts/verify-dsh-runtime-e2e.mjs [apiUrl] [projectLabel]
  */
@@ -47,8 +49,10 @@ for (const line of lines) {
 	if (inConfig) {
 		const m = line.match(/^ {4}([A-Za-z][A-Za-z0-9_]*):\s*(.*)$/);
 		if (!m) { if (line.trim() === "") continue; break; }
-		let v = m[2].trim().replace(/^['"]|['"]$/g, "");
-		if (v === "true") v = true;
+		let v = m[2].trim();
+		const quoted = /^(['"])(.*)\1$/.exec(v);
+		if (quoted) v = quoted[2];
+		else if (v === "true") v = true;
 		else if (v === "false") v = false;
 		else if (v === "null" || v === "~" || v === "") v = null;
 		cfg ??= {};
@@ -59,11 +63,33 @@ check("从 dsh --dump-config 取到 hindsight-memory 配置", !!cfg && !!cfg.ban
 	JSON.stringify(cfg ?? null));
 
 if (!cfg) process.exit(1);
-check("DSH 合成配置的 scoping 是 per-project", cfg.scoping === "per-project", `scoping=${cfg.scoping}`);
-check("DSH 合成配置的 bankId 是 mem", cfg.bankId === "mem", `bankId=${cfg.bankId}`);
+
+// 🔴 实测（2026-10-28）：DSH 运行时**没有把行配置投递给本插件** ——
+// 改 profile 的 cordis.patch.yml 与插件自带的 cordis.patch.yml 都不生效，
+// 只有 src/config.js 的 DEFAULTS 会改变运行时行为。
+// 所以这里以「插件包内默认值」为运行时真源，并要求宿主配置与它一致：
+// 两边一致时，无论宿主将来是否投递配置，跑出来的 bank 都一样。
+const runtimeConfig = normalizeConfig({});
+check(
+	"插件包内默认配置 = per-project",
+	runtimeConfig.scoping === "per-project",
+	`scoping=${runtimeConfig.scoping}`,
+);
+check(
+	"插件包内默认配置 = bankId mem",
+	runtimeConfig.bankId === "mem",
+	`bankId=${runtimeConfig.bankId}`,
+);
+check(
+	"宿主合成配置与插件默认配置一致（bankId/scoping/精神模型前缀）",
+	cfg.bankId === runtimeConfig.bankId &&
+		cfg.scoping === runtimeConfig.scoping &&
+		(cfg.mentalModelPrefix ?? "") === runtimeConfig.mentalModelPrefix,
+	`host=${JSON.stringify({ bankId: cfg.bankId, scoping: cfg.scoping, mentalModelPrefix: cfg.mentalModelPrefix })} plugin=${JSON.stringify({ bankId: runtimeConfig.bankId, scoping: runtimeConfig.scoping, mentalModelPrefix: runtimeConfig.mentalModelPrefix })}`,
+);
 
 // ── 2. 喂给插件自己的配置归一化 + client ───────────────────────────────────
-const pluginConfig = normalizeConfig({ ...cfg, apiUrl });
+const pluginConfig = normalizeConfig({ apiUrl });
 const client = new HindsightMemoryClient({ config: pluginConfig, label });
 const expectedBank = `${pluginConfig.bankId}-${label.toLowerCase()}`;
 check("插件解析出的 bank 名正确", client.bankId === expectedBank, `client.bankId=${client.bankId}`);

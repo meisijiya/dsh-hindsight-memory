@@ -1237,3 +1237,46 @@ async #o(t, e, s) {
   单 bank 多中文项目的场景应切 `per-project`。
 - `mentalModelPrefix` 保留而非删除：它是公开配置键，按插件的契约策略（先加新的、标旧字段 deprecated、
   下一 minor 再删）不在这版里移除；但默认值已改为空串。
+
+## 34. 运行时配置真源：DSH 不投递行配置，插件跑的是包内 DEFAULTS
+
+### 34.1 现象
+
+本机 Hindsight 已切 per-project 布局（基名 `mem`，库名 `mem-<项目名小写>`），omp 侧配置同步改完，
+但 **DSH 侧仍在旧单库 `shared` 上跑 `per-project-tagged`**：DSH Web 的「记忆看板」显示
+`shared / 2426 条事实 / 全局层·项目层·其它项目层`，而不是 `mem-随便问问`。
+后果：0.8.0 的「两端共用同一份精神模型」对 DSH 实际未生效 —— DSH 注入的还是 `shared` 里那 35 个模型
+（含 `dsh-*` 副本）。
+
+### 34.2 判定实验（三步，各自独立）
+
+| 改哪里 | 运行时是否变化 |
+|---|---|
+| `~/.dsh/profiles/web/cordis.patch.yml` 的 `bankId` | ❌ 无变化 |
+| 包内 `cordis.patch.yml` 的 `bankId` / `scoping` | ❌ 无变化 |
+| `src/config.js` 的 `DEFAULTS.bankId` | ✅ 立刻生效（看板报 `Bank 'probedefault' not found`） |
+
+⇒ DSH 启动后交给本插件的 `rawConfig` 是**空对象**，`normalizeConfig()` 用 `DEFAULTS` 补齐，
+运行时行为完全由包内默认值决定。
+
+### 34.3 为什么 `dsh --dump-config` 看不出来
+
+`--dump-config` 输出的是 **profile 各 patch 层的合成视图**（bundle 层 → profile 层 → overlay 层），
+不是「宿主实际投递给插件的那份配置」。合成视图里 `hindsight-memory` 行确实带着 profile 写的
+`bankId: mem`，所以按它写的验证脚本会 10/10 通过 —— 而插件根本没收到这份配置。
+⇒ **验证脚本不能拿 dump 当运行时真源**。
+
+### 34.4 设计决定
+
+- 运行时真源 = `src/config.js` 的 `DEFAULTS`（当前 `bankId: mem` + `scoping: per-project`）。
+- **四层默认值必须一致**：`DEFAULTS` / 包内 `cordis.patch.yml` / `src/schema.js` / `src/ui-client.js`，
+  由 `test/defaults.test.js` 门禁。这样无论宿主是否投递行配置，跑出来的 bank 都一样。
+- `scripts/verify-dsh-runtime-e2e.mjs` 增加一项检查：**宿主合成配置 == 插件默认配置**，
+  防止将来只改一边又出现「看板显示一个库、实际写另一个库」。
+- 面板文案同步：原写「改配置请编辑 profile 的 cordis.patch.yml」是**无效路径**，改为说明真源在包内默认值。
+
+### 34.5 已知未解
+
+DSH 为什么没把行配置投递给这个插件，尚未定位到框架层的具体原因（本插件的 `Config` schema、
+行 id/name、`- insert:` 结构都逐项试过，均无效果）。当前做法是**让所有层取值一致**，
+绕开宿主行为而不是依赖它；宿主将来若投递配置，行为不变。
