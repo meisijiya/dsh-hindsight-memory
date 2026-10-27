@@ -281,6 +281,17 @@ id 规则随作用域变化，与 omp 逐字对齐：
 > `mentalModelPrefix` 配置项保留为**可选隔离层**：默认空 = 与 omp 完全同名；
 > 填值（如 `dsh`）就在 omp 的 id 前再加一层，用于「同一 bank 内两端必须用不同模型」的特殊场景。
 
+### 渲染预算：两端内容可能不等长
+
+omp 把精神模型正文渲染成 `<mental_models>` 块，受 `hindsight.mentalModelMaxRenderChars` 约束
+（默认 16000 字符，**在模型之间等分**，超了块尾出现 `…[mental-model snapshot truncated at render budget]`）。
+本插件的 `renderMentalModelMessage()` **不设预算、渲染全量**。
+
+所以「共用同一份模型」不等于「两端看到的字符数一样」：模型正文够长时 omp 会被截断，DSH 不会。
+模型正文越长的项目越明显（实测 `mem-随便问问` 无截断需 34000 字符，7 个 bank 里有 6 个在默认 16000 下被截断）。
+需要两端内容对齐时，把 omp 侧的 `hindsight.mentalModelMaxRenderChars` 调到覆盖最长的一节
+（代价：静态系统提示前缀变大）。
+
 ## 运维观测：失败任务不会自动重试
 
 Hindsight 的抽取/刷新/合并任务都进 `operations` 队列，**失败不会自动重试**

@@ -5,6 +5,13 @@
 
 版本策略（0.x 阶段）：0.x.y 中 x 递增代表契约变化，y 代表向后兼容的功能/修复。
 
+## 0.8.1 — 写清「渲染预算让两端内容不等长」这件事
+
+- 背景：0.8.0 让两端共用同一份精神模型后，「共用模型」与「两端看到同样多的字符」是两件事。omp 把正文渲染成 `<mental_models>` 块，受 `hindsight.mentalModelMaxRenderChars` 约束（默认 16000 字符，**在模型之间等分**，超了块尾出现 `…[mental-model snapshot truncated at render budget]`）；本插件的 `renderMentalModelMessage()` 不设预算、渲染全量。模型正文够长时 omp 会被截断、DSH 不会。
+- 实测：7 个 `mem-*` bank 里有 6 个在默认 16000 下被截断；无截断所需最小预算 `mem-随便问问` 34000（4 个模型，最长一节 8199 字符）、`mem-新简历项目` 28000、`mem-universal-video-downloader` / `mem-enterprise-delivery-platform` 24000、`mem-毕设` / `mem-ecc-omp-fork` 20000、`mem-blog` 16000。
+- 文档：README 新增「渲染预算：两端内容可能不等长」小节，写明两端的渲染差异、实测数字、以及要对齐内容时该调哪一侧。
+- 契约未变：工具名与工具数量不变（仍 9 个 `memory_*`），配置键无新增，返回体无新增字段。**仅文档 + 版本号**。
+
 ## 0.8.0 — 精神模型与 omp 统一到同一份（取消 `dsh-` 前缀 + 注入过滤改为 scope 语义）
 
 - 背景：0.7.x 的 `dsh-` 前缀是为「单 bank + 标签分栏」时代设计的避撞手段（那时所有项目共用一个 `shared` bank，omp 的 id 又会把纯中文项目名全部退化成 `project-conventions-project`，见 §25.4）。切到 `per-project`（每项目独占一个 bank）后这个约束消失了，前缀本身开始制造**重复注入**。
